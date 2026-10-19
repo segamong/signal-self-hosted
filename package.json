@@ -1,6 +1,6 @@
 {
   "name": "signal-self-hosted",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "Сигнал — общение на своём сервере",
   "author": "Signal Community",
   "main": "desktop/main.cjs",

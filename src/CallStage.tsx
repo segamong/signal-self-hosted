@@ -245,6 +245,16 @@ export default function CallStage({ channel, user, onLeave, onError, initialPref
   const cameraQualityRef = useRef(cameraQuality);
   cameraQualityRef.current = cameraQuality;
   const [shareAudio, setShareAudio] = useState(true);
+  const [desktopScreenAudio, setDesktopScreenAudio] = useState<'checking' | 'filtered' | 'unavailable'>(window.signalDesktop ? 'checking' : 'unavailable');
+  useEffect(() => {
+    const desktop = window.signalDesktop;
+    if (!desktop) return;
+    let cancelled = false;
+    void desktop.getInfo().then(info => {
+      if (!cancelled) setDesktopScreenAudio(info.screenAudioExcludesOwnAudio === true ? 'filtered' : 'unavailable');
+    }).catch(() => { if (!cancelled) setDesktopScreenAudio('unavailable'); });
+    return () => { cancelled = true; };
+  }, []);
   const [volumes, setVolumes] = useState<Record<string, number>>({});
   const [focusedShare, setFocusedShare] = useState<string | null>(null);
   const focusedShareRef = useRef<string | null>(null);
@@ -554,10 +564,11 @@ export default function CallStage({ channel, user, onLeave, onError, initialPref
       videoConstraints.width = { max: profile.width };
       videoConstraints.height = { max: profile.height };
     }
-    const trustedDesktop = Boolean(window.signalDesktop);
+    const trustedDesktop = Boolean(window.signalDesktop) && desktopScreenAudio === 'filtered';
+    const captureAudio = shareAudio && (!window.signalDesktop || trustedDesktop);
     const displayOptions: DisplayMediaStreamOptions & { systemAudio: 'include' | 'exclude'; selfBrowserSurface: 'exclude'; surfaceSwitching: 'include' } = {
       video: videoConstraints,
-      ...screenAudioCaptureOptions(shareAudio, navigator.mediaDevices.getSupportedConstraints(), trustedDesktop),
+      ...screenAudioCaptureOptions(captureAudio, navigator.mediaDevices.getSupportedConstraints(), trustedDesktop),
       selfBrowserSurface: 'exclude', surfaceSwitching: 'include',
     };
     // Native modes intentionally omit width/height and bypass the SDK's
@@ -685,9 +696,10 @@ export default function CallStage({ channel, user, onLeave, onError, initialPref
         <label>Максимальный битрейт<select value={screenBitrate} disabled={sharing || busy === 'screen'} onChange={event => setScreenBitrate(Number(event.target.value))}><option value={12_000_000}>12 Мбит/с</option><option value={24_000_000}>24 Мбит/с · высокое качество</option><option value={40_000_000}>40 Мбит/с · максимум</option></select></label>
         <label>Что показываете<select value={screenContent} disabled={sharing || busy === 'screen'} onChange={event => setScreenContent(event.target.value as 'text' | 'motion')}><option value="text">Текст и приложения · чёткость</option><option value="motion">Игры и видео · движение</option></select></label>
         <label>Кодек экрана<select value={screenCodec} disabled={sharing || busy === 'screen'} onChange={event => setScreenCodec(event.target.value as ScreenCodecChoice)}><option value="auto">Авто · оценка браузера</option><option value="h264" disabled={!screenCodecs.includes('h264')}>H.264{!screenCodecs.includes('h264') ? ' · недоступен' : ''}</option><option value="vp9" disabled={!screenCodecs.includes('vp9')}>VP9{!screenCodecs.includes('vp9') ? ' · недоступен' : ''}</option><option value="vp8" disabled={!screenCodecs.includes('vp8')}>VP8{!screenCodecs.includes('vp8') ? ' · недоступен' : ''}</option></select></label>
-        <label className="checkbox-label"><input type="checkbox" checked={shareAudio} disabled={sharing || busy === 'screen'} onChange={event => setShareAudio(event.target.checked)} />Передавать звук вкладки / системы</label></div>
+        <label className="checkbox-label"><input type="checkbox" checked={shareAudio && (!window.signalDesktop || desktopScreenAudio === 'filtered')} disabled={sharing || busy === 'screen' || Boolean(window.signalDesktop && desktopScreenAudio !== 'filtered')} onChange={event => setShareAudio(event.target.checked)} />Передавать звук вкладки / системы</label></div>
       <p className="settings-hint">Исходное разрешение; WebRTC использует сжатие. Фактическое качество зависит от сети. Для смены параметров остановите трансляцию.</p>
       <p className="settings-hint">Для звука включите его передачу в окне выбора экрана или вкладки браузера.</p>
+      {window.signalDesktop && desktopScreenAudio === 'unavailable' && <p className="settings-hint">Эта версия Windows не поддерживает захват системного звука с исключением голосов звонка. Для передачи звука отдельной вкладки откройте Сигнал в браузере.</p>}
       <p className="settings-hint">«Авто» учитывает оценку кодирования браузером. При нехватке процессора или полосы частота кадров может падать. Получаем только видео и звук выбранной демонстрации.</p>
     </div>}
 

@@ -4,10 +4,13 @@ const { app, BrowserWindow, Menu, Tray, nativeImage, session, protocol, net, ipc
 const { pathToFileURL } = require('node:url');
 const path = require('node:path');
 const fs = require('node:fs');
+const os = require('node:os');
 const WebSocket = require('ws');
 const { SERVER_ORIGIN, SERVER_WEBSOCKET, APP_URL, PICKER_URL, isAppUrl, apiTarget, inviteCode, assetPath, isServerNetwork } = require('./security.cjs');
 const { createManualUpdater } = require('./updater.cjs');
+const { supportsOwnAudioExclusion } = require('./capture-audio.cjs');
 const isPortable = Boolean(process.env.PORTABLE_EXECUTABLE_FILE);
+const screenAudioExcludesOwnAudio = supportsOwnAudioExclusion(os.platform(), os.release());
 
 protocol.registerSchemesAsPrivileged([{ scheme: 'app', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } }]);
 app.setName('Сигнал');
@@ -216,7 +219,7 @@ function finishCapture(selection) {
     if (!selection || !mainWindow || mainWindow.isDestroyed() || pending.frame !== mainWindow.webContents.mainFrame || !isAppUrl(pending.frame.url)) return pending.callback(null);
     const source = pending.sources.find((item) => item.id === selection.id);
     if (!source) return pending.callback(null);
-    pending.callback({ video: source, ...(selection.audio && pending.audioAvailable ? { audio: 'loopback' } : {}) });
+    pending.callback({ video: source, ...(selection.audio && pending.audioAvailable && screenAudioExcludesOwnAudio ? { audio: 'loopback' } : {}) });
   } catch { /* Destroyed frame: Chromium already rejects the request. */ }
 }
 
@@ -270,7 +273,7 @@ function configureSession() {
       minWidth: 650, minHeight: 560, show: false, autoHideMenuBar: true, backgroundColor: '#11131c',
       webPreferences: { session: clientSession, preload: path.join(__dirname, 'picker', 'preload.cjs'), sandbox: true, contextIsolation: true, nodeIntegration: false, webSecurity: true, spellcheck: false },
     });
-    capture = { window: picker, callback, frame: request.frame, sources: [], audioAvailable: process.platform === 'win32' && request.audioRequested, timer: setTimeout(() => finishCapture(null), 120000) };
+    capture = { window: picker, callback, frame: request.frame, sources: [], audioAvailable: screenAudioExcludesOwnAudio && request.audioRequested, timer: setTimeout(() => finishCapture(null), 120000) };
     hardenWindow(picker);
     picker.on('closed', () => { if (capture?.window === picker) finishCapture(null); });
     picker.once('ready-to-show', () => picker.show());
@@ -279,7 +282,7 @@ function configureSession() {
 }
 
 function configureIpc() {
-  ipcMain.handle('signal:info', (event) => { requireMainSender(event); return { version: app.getVersion(), serverOrigin: SERVER_ORIGIN, platform: process.platform, packaged: app.isPackaged, portable: isPortable }; });
+  ipcMain.handle('signal:info', (event) => { requireMainSender(event); return { version: app.getVersion(), serverOrigin: SERVER_ORIGIN, platform: process.platform, packaged: app.isPackaged, portable: isPortable, screenAudioExcludesOwnAudio }; });
   ipcMain.handle('signal:api', (event, pathname, body) => { requireMainSender(event); return requestApi(pathname, body); });
   ipcMain.handle('signal:update-state', (event) => { requireMainSender(event); return updater.getState(); });
   ipcMain.handle('signal:update-check', (event) => { requireMainSender(event); return updater.checkUpdate(); });

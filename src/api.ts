@@ -13,7 +13,7 @@ declare global {
       onmessage:((event:{data:string})=>void)|null;
     };
     signalDesktop?: {
-      getInfo():Promise<{version:string;serverOrigin:string;platform:string}>;
+      getInfo():Promise<{version:string;serverOrigin:string;platform:string;screenAudioExcludesOwnAudio?:boolean}>;
       requestApi(path:string,body?:unknown):Promise<{status:number;data:any}>;
       subscribeEvents(callback:(event:DesktopEvent)=>void):()=>void;
       windowAction(action:'minimize'|'maximize'|'close'):void;
