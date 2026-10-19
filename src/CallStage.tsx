@@ -3,7 +3,9 @@ import { api } from './api';
 import { Room, RoomEvent, ConnectionState, DisconnectReason, Track, LocalVideoTrack, LocalAudioTrack, RemoteAudioTrack, VideoPresets, VideoQuality, BackupCodecPolicy, type LocalTrackPublication, type Participant, type RemoteParticipant, type TrackPublishOptions } from 'livekit-client';
 import { Headphones, HeadphoneOff, Mic, MicOff, Video, VideoOff, MonitorUp, MonitorOff, PhoneOff, Settings2, Volume2, VolumeX, Radio, ChevronDown, Maximize2, Minimize2, LoaderCircle, RefreshCw } from 'lucide-react';
 import './camera-fullscreen.css';
-import ScreenDiagnostics from './ScreenDiagnostics';
+import ScreenShareFrame from './ScreenShareFrame';
+import { toggleElementFullscreen } from './fullscreen';
+import { filterScreenAudio, screenAudioCaptureOptions } from './screenAudio';
 import { availableScreenCodecs, chooseScreenCodec, type ScreenCodecChoice } from './screenCodecs';
 
 export interface CallStageProps {
@@ -94,6 +96,7 @@ function MediaVideo({ track, local, screen }: { track: Track; local: boolean; sc
     if (!element) return;
     element.muted = true;
     track.attach(element);
+    if (screen) return () => { track.detach(element); };
     const update = () => {
       const settings = track.mediaStreamTrack.getSettings();
       const width = element.videoWidth || settings.width;
@@ -111,10 +114,10 @@ function MediaVideo({ track, local, screen }: { track: Track; local: boolean; sc
       element.removeEventListener('resize', update);
       track.detach(element);
     };
-  }, [track, local]);
+  }, [track, local, screen]);
   return <>
     <video ref={elementRef} autoPlay playsInline muted className={`${screen ? 'screen-video' : 'camera-video'}${local && !screen ? ' mirrored' : ''}`} />
-    {actual && <span className="video-quality" title="Размер отображаемого кадра. Целевая частота захвата не является измеренной частотой передачи.">{actual}</span>}
+    {!screen && actual && <span className="video-quality" title="Размер отображаемого кадра. Целевая частота захвата не является измеренной частотой передачи.">{actual}</span>}
   </>;
 }
 
@@ -183,9 +186,7 @@ function ParticipantTile({ participant, username, local, volume, onVolume, onErr
     if (!tile || !track || changingFullscreen.current) return;
     changingFullscreen.current = true;
     try {
-      const operation = document.fullscreenElement === tile
-        ? document.exitFullscreen()
-        : tile.requestFullscreen({ navigationUI: 'hide' });
+      const operation = toggleElementFullscreen(tile);
       void operation.catch(() => onError('Не удалось развернуть видео на весь экран. Повторите нажатие.'))
         .finally(() => { changingFullscreen.current = false; });
     } catch {
@@ -553,10 +554,11 @@ export default function CallStage({ channel, user, onLeave, onError, initialPref
       videoConstraints.width = { max: profile.width };
       videoConstraints.height = { max: profile.height };
     }
-    const displayOptions: DisplayMediaStreamOptions & { systemAudio: 'include'; selfBrowserSurface: 'exclude'; surfaceSwitching: 'include' } = {
+    const trustedDesktop = Boolean(window.signalDesktop);
+    const displayOptions: DisplayMediaStreamOptions & { systemAudio: 'include' | 'exclude'; selfBrowserSurface: 'exclude'; surfaceSwitching: 'include' } = {
       video: videoConstraints,
-      audio: shareAudio ? { echoCancellation: false, noiseSuppression: false, autoGainControl: false } : false,
-      systemAudio: 'include', selfBrowserSurface: 'exclude', surfaceSwitching: 'include',
+      ...screenAudioCaptureOptions(shareAudio, navigator.mediaDevices.getSupportedConstraints(), trustedDesktop),
+      selfBrowserSurface: 'exclude', surfaceSwitching: 'include',
     };
     // Native modes intentionally omit width/height and bypass the SDK's
     // default 1080p capture limit. The browser still asks what to share.
@@ -565,6 +567,8 @@ export default function CallStage({ channel, user, onLeave, onError, initialPref
       stream.getTracks().forEach(track => track.stop());
       return;
     }
+    const { warning } = filterScreenAudio(stream, trustedDesktop);
+    if (warning) callbacks.current.onError(warning);
     const capture: ScreenCaptureSession = { room: current, stream, stopped: false, tracks: [], dispose: () => {} };
     const ended = () => {
       releaseScreenCapture(current, capture);
@@ -663,13 +667,10 @@ export default function CallStage({ channel, user, onLeave, onError, initialPref
     {room && <>
       {audioBlocked && !deafened && <div className="audio-unlock" role="status"><Volume2 size={18} /><span>Браузер ожидает разрешения на воспроизведение звука.</span><button onClick={() => act('audio', async current => { await current.startAudio(); if (roomRef.current === current) setAudioBlocked(!current.canPlaybackAudio); })}>Включить звук</button></div>}
       <div className="remote-audio" aria-hidden="true">{remote.flatMap(participant => [...participant.audioTrackPublications.values()].map(publication => publication.audioTrack instanceof RemoteAudioTrack && (publication.source !== Track.Source.ScreenShareAudio || participant.identity === shareParticipant?.identity) ? <RemoteAudio key={publication.trackSid} track={publication.audioTrack} deafened={deafened} volume={volumes[participant.identity] ?? 100} onBlocked={markAudioBlocked} /> : null))}</div>
-      {shareParticipant && <div className="share-stage">
-        <div className="share-title"><span><MonitorUp size={16} />{usernameFor(shareParticipant)} <small>демонстрирует экран</small></span>
-          <button className="icon-button" title="На весь экран" aria-label="Открыть демонстрацию на весь экран" onClick={event => { const stage = event.currentTarget.closest('.share-stage'); if (stage && 'requestFullscreen' in stage) void stage.requestFullscreen().catch(error => callbacks.current.onError(messageFor(error))); }}><Maximize2 size={16} /></button></div>
+      {shareParticipant && <ScreenShareFrame username={usernameFor(shareParticipant)} onError={message => callbacks.current.onError(message)}>
         <div className="share-video-wrap">{shareTrack ? <MediaVideo track={shareTrack} local={shareParticipant.isLocal} screen /> : <div className="share-loading"><LoaderCircle className="spin" size={24} /><span>Подключаем выбранную демонстрацию…</span></div>}</div>
-        {shareTrack && <ScreenDiagnostics key={shareTrack.sid || shareParticipant.identity} track={shareTrack} local={shareParticipant.isLocal} targetFps={shareParticipant.isLocal ? SCREEN_PROFILES[screenProfile].fps : undefined} />}
         {shares.length > 1 && <div className="share-switcher">{shares.map(participant => <button key={participant.identity} className={participant === shareParticipant ? 'active' : ''} aria-pressed={participant === shareParticipant} onClick={() => focusShare(participant.identity)}>{usernameFor(participant)}</button>)}</div>}
-      </div>}
+      </ScreenShareFrame>}
       <div className={`participant-grid${shareParticipant ? ' thumbnails' : ''}`}>{participants.map(participant => <ParticipantTile key={participant.identity} participant={participant} username={usernameFor(participant)} local={participant.isLocal} compact={!!shareParticipant} volume={volumes[participant.identity] ?? 100} onVolume={value => setVolumes(previous => ({ ...previous, [participant.identity]: value }))} onError={message => callbacks.current.onError(message)} />)}</div>
       {participants.length === 1 && !shareParticipant && <div className="call-alone"><span>Здесь пока тихо</span><p>Вы уже в канале. Пригласите друзей и начните разговор.</p></div>}
     </>}
@@ -685,9 +686,9 @@ export default function CallStage({ channel, user, onLeave, onError, initialPref
         <label>Что показываете<select value={screenContent} disabled={sharing || busy === 'screen'} onChange={event => setScreenContent(event.target.value as 'text' | 'motion')}><option value="text">Текст и приложения · чёткость</option><option value="motion">Игры и видео · движение</option></select></label>
         <label>Кодек экрана<select value={screenCodec} disabled={sharing || busy === 'screen'} onChange={event => setScreenCodec(event.target.value as ScreenCodecChoice)}><option value="auto">Авто · оценка браузера</option><option value="h264" disabled={!screenCodecs.includes('h264')}>H.264{!screenCodecs.includes('h264') ? ' · недоступен' : ''}</option><option value="vp9" disabled={!screenCodecs.includes('vp9')}>VP9{!screenCodecs.includes('vp9') ? ' · недоступен' : ''}</option><option value="vp8" disabled={!screenCodecs.includes('vp8')}>VP8{!screenCodecs.includes('vp8') ? ' · недоступен' : ''}</option></select></label>
         <label className="checkbox-label"><input type="checkbox" checked={shareAudio} disabled={sharing || busy === 'screen'} onChange={event => setShareAudio(event.target.checked)} />Передавать звук вкладки / системы</label></div>
-      <p className="settings-hint">Исходное разрешение; WebRTC использует сжатие. Фактическое качество зависит от сети. Размер потока виден на видео. Для смены параметров остановите трансляцию.</p>
+      <p className="settings-hint">Исходное разрешение; WebRTC использует сжатие. Фактическое качество зависит от сети. Для смены параметров остановите трансляцию.</p>
       <p className="settings-hint">Для звука включите его передачу в окне выбора экрана или вкладки браузера.</p>
-      <p className="settings-hint">«Авто» учитывает оценку кодирования браузером. Ни один кодек не гарантирует аппаратное ускорение. При нехватке процессора или полосы частота кадров может падать, сохраняя разрешение; измерения видны под выбранным экраном. Получаем только его видео и звук, остальные демонстрации ждут выбора.</p>
+      <p className="settings-hint">«Авто» учитывает оценку кодирования браузером. При нехватке процессора или полосы частота кадров может падать. Получаем только видео и звук выбранной демонстрации.</p>
     </div>}
 
     <div className="call-toolbar"><div className="toolbar-main">
