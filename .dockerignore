@@ -1,5 +1,6 @@
 node_modules
 dist
+dist-android
 .git
 .env
 deploy/.env

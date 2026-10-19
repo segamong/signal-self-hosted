@@ -30,6 +30,7 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import io.livekit.android.room.Room
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -151,7 +152,7 @@ class CallActivity : ComponentActivity() {
         startRequestedCall()
         try {
             bound = bindService(Intent(this, CallService::class.java), connection, Context.BIND_AUTO_CREATE)
-            if (Build.VERSION.SDK_INT >= 33 && !notificationRequested && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            if (Build.VERSION.SDK_INT >= 33 && !notificationRequested && ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
                 notificationRequested = true
                 notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
             }
@@ -212,8 +213,13 @@ class CallActivity : ComponentActivity() {
             setBackgroundColor(BACKGROUND)
             setPadding(dp(12), dp(10), dp(12), dp(10))
             setOnApplyWindowInsetsListener { view, insets ->
-                val system = insets.getInsets(WindowInsets.Type.systemBars())
-                view.setPadding(system.left + dp(12), system.top + dp(10), system.right + dp(12), system.bottom + dp(10))
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    val system = insets.getInsets(WindowInsets.Type.systemBars())
+                    view.setPadding(system.left + dp(12), system.top + dp(10), system.right + dp(12), system.bottom + dp(10))
+                } else {
+                    @Suppress("DEPRECATION")
+                    view.setPadding(insets.systemWindowInsetLeft + dp(12), insets.systemWindowInsetTop + dp(10), insets.systemWindowInsetRight + dp(12), insets.systemWindowInsetBottom + dp(10))
+                }
                 insets
             }
         }
@@ -246,14 +252,18 @@ class CallActivity : ComponentActivity() {
         options.addView(bitrate)
         options.addView(codec)
         appAudio = CheckBox(this).apply {
-            text = "Звук приложений вместе с микрофоном"
+            text = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) "Звук приложений вместе с микрофоном" else "Звук приложений · нужен Android 10 или новее"
             setTextColor(TEXT)
             textSize = 13f
             buttonTintList = ColorStateList.valueOf(ACCENT)
             isChecked = false
         }
         options.addView(appAudio)
-        options.addView(text("Включается отдельно, когда микрофон уже включён. Android разрешает захват звука лишь некоторых приложений: игры и медиа без запрета записи; защищённый контент и звонки могут быть без звука. Выключение микрофона отключает и этот звук. Для смены настроек остановите показ.", 12f, MUTED))
+        options.addView(text(if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            "Включается отдельно, когда микрофон уже включён. Android разрешает захват звука лишь некоторых приложений: игры и медиа без запрета записи; защищённый контент и звонки могут быть без звука. Выключение микрофона отключает и этот звук. Для смены настроек остановите показ."
+        } else {
+            "На этой версии Android можно передавать экран и микрофон. Захват звука других приложений появился в Android 10. Для смены качества остановите показ."
+        }, 12f, MUTED))
         body.addView(options)
         scroll.addView(body)
         root.addView(scroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
@@ -269,8 +279,11 @@ class CallActivity : ComponentActivity() {
             if (currentState.screen) service?.stopScreen() else requestScreen()
         }
         speaker = button("Динамик") {
-            if (currentState.speaker) permission("headphones", Manifest.permission.BLUETOOTH_CONNECT) { service?.setSpeaker(false) }
-            else service?.setSpeaker(true)
+            if (currentState.speaker) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    permission("headphones", Manifest.permission.BLUETOOTH_CONNECT) { service?.setSpeaker(false) }
+                } else service?.setSpeaker(false)
+            } else service?.setSpeaker(true)
         }
         deafen = button("Звук включён") { service?.setDeafened(!currentState.deafened) }
         flip = button("Сменить камеру") { service?.flipCamera() }
@@ -322,8 +335,8 @@ class CallActivity : ComponentActivity() {
         deafen.text = if (state.deafened) "Звук выключен" else "Звук включён"
         speaker.text = if (state.speaker) "Наушники" else "Динамик"
         listOf(fps, bitrate, codec, appAudio).forEach { it.isEnabled = !state.screen && !state.busy }
-        if (!state.microphone) appAudio.isChecked = false
-        appAudio.isEnabled = !state.screen && !state.busy && state.microphone
+        if (!state.microphone || Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) appAudio.isChecked = false
+        appAudio.isEnabled = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && !state.screen && !state.busy && state.microphone
         retry.visibility = if (state.phase in setOf("ended", "error", "idle")) View.VISIBLE else View.GONE
         dispatchPendingMedia()
         val currentRoom = service?.room
@@ -376,19 +389,23 @@ class CallActivity : ComponentActivity() {
 
     private fun requestScreen() {
         if (service == null || currentState.phase != "connected" || screenRequest != null) return
-        val desired = ScreenRequest(appAudio.isChecked, if (fps.selectedItemPosition == 1) 60 else 30, listOf(12_000_000, 24_000_000, 40_000_000)[bitrate.selectedItemPosition.coerceIn(0, 2)], listOf("h264", "vp9", "vp8")[codec.selectedItemPosition.coerceIn(0, 2)])
+        val desired = ScreenRequest(Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && appAudio.isChecked, if (fps.selectedItemPosition == 1) 60 else 30, listOf(12_000_000, 24_000_000, 40_000_000)[bitrate.selectedItemPosition.coerceIn(0, 2)], listOf("h264", "vp9", "vp8")[codec.selectedItemPosition.coerceIn(0, 2)])
         screenRequest = desired
-        val manager = getSystemService(MediaProjectionManager::class.java)
-        try { screenConsent.launch(manager.createScreenCaptureIntent()) }
+        try {
+            val manager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+            screenConsent.launch(manager.createScreenCaptureIntent())
+        }
         catch (_: Exception) { screenRequest = null; notice("Системный выбор экрана недоступен.") }
     }
 
     private fun startRequestedCall() {
         if (!callRequested) return
         try {
-            startForegroundService(Intent(this, CallService::class.java)
+            val request = Intent(this, CallService::class.java)
                 .putExtra(CallService.EXTRA_CHANNEL_ID, channelId)
-                .putExtra(CallService.EXTRA_CHANNEL_NAME, channelName))
+                .putExtra(CallService.EXTRA_CHANNEL_NAME, channelName)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(request)
+            else startService(request)
             callRequested = false
         } catch (_: Exception) {
             notice("Не удалось запустить звонок. Повторно откройте канал.")
@@ -398,7 +415,7 @@ class CallActivity : ComponentActivity() {
     }
 
     private fun permission(action: String, permission: String, granted: () -> Unit) {
-        if (checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED) granted()
+        if (ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED) granted()
         else if (pendingPermission == null) { pendingPermission = action; mediaPermission.launch(permission) }
     }
 

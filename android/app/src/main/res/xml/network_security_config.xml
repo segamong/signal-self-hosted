@@ -3,4 +3,15 @@
     <base-config cleartextTrafficPermitted="false">
         <trust-anchors><certificates src="system" /></trust-anchors>
     </base-config>
+    <!-- Public Let's Encrypt roots, scoped to this server. Older system
+         stores may lack them. Dates, chain signatures and hostname stay
+         verified; Android 5–6 use the equivalent native ServerTls policy. -->
+    <domain-config cleartextTrafficPermitted="false">
+        <domain includeSubdomains="false">13.143.172.92</domain>
+        <trust-anchors>
+            <certificates src="system" />
+            <certificates src="@raw/isrg_root_x1" />
+            <certificates src="@raw/isrg_root_x2" />
+        </trust-anchors>
+    </domain-config>
 </network-security-config>

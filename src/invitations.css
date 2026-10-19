@@ -154,7 +154,7 @@
 .invitation-inbox-list {
   display: grid;
   gap: 12px;
-  max-height: min(52dvh, 500px);
+  max-height:min(52vh, 500px);max-height:min(52dvh, 500px);
   margin: 0;
   padding: 2px 4px 4px 2px;
   overflow: auto;

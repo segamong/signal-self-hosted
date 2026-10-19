@@ -7,16 +7,20 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.net.Uri
 import android.os.Binder
+import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
+import androidx.core.content.ContextCompat
 import com.twilio.audioswitch.AudioDevice
 import com.twilio.audioswitch.AudioDeviceChangeListener
 import io.livekit.android.LiveKit
+import io.livekit.android.LiveKitOverrides
 import io.livekit.android.RoomOptions
 import io.livekit.android.audio.ScreenAudioCapturer
 import io.livekit.android.events.RoomEvent
@@ -108,10 +112,12 @@ class CallService : Service() {
         super.onCreate()
         LiveKit.loggingLevel = LoggingLevel.OFF
         LiveKit.enableWebRTCLogging = false
-        val manager = getSystemService(NotificationManager::class.java)
-        manager.createNotificationChannel(NotificationChannel(CHANNEL, "Звонок Сигнала", NotificationManager.IMPORTANCE_LOW).apply {
-            description = "Управление текущим голосовым звонком"
-        })
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val manager = getSystemService(NotificationManager::class.java)
+            manager.createNotificationChannel(NotificationChannel(CHANNEL, "Звонок Сигнала", NotificationManager.IMPORTANCE_LOW).apply {
+                description = "Управление текущим голосовым звонком"
+            })
+        }
     }
 
     override fun onBind(intent: Intent?): IBinder = binder
@@ -167,7 +173,7 @@ class CallService : Service() {
                     videoTrackPublishDefaults = VideoTrackPublishDefaults(videoEncoding = VideoEncoding(3_500_000, 30), videoCodec = "h264"),
                     screenShareTrackCaptureDefaults = LocalVideoTrackOptions(isScreencast = true, captureParams = VideoCaptureParameter(0, 0, 30, adaptOutputToDimensions = false)),
                     screenShareTrackPublishDefaults = screenPublishOptions(30, 24_000_000, "h264"),
-                ))
+                ), LiveKitOverrides(okHttpClient = ServerTls.httpClient))
                 room = nextRoom
                 controlScope = CoroutineScope(SupervisorJob(scope.coroutineContext[Job]) + Dispatchers.Main.immediate)
                 nextRoom.audioSwitchHandler?.registerAudioDeviceChangeListener(audioDevicesListener)
@@ -270,14 +276,14 @@ class CallService : Service() {
     }
 
     fun setMicrophone(enabled: Boolean) = control("Не удалось изменить состояние микрофона.") { current ->
-        if (enabled && checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) throw SecurityException()
+        if (enabled && ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) throw SecurityException()
         if (!enabled) detachScreenAudio(current)
         updateForeground(microphone = enabled)
         check(withContext(Dispatchers.IO) { current.localParticipant.setMicrophoneEnabled(enabled) })
     }
 
     fun setCamera(enabled: Boolean) = control("Не удалось изменить состояние камеры.") { current ->
-        if (enabled && checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) throw SecurityException()
+        if (enabled && ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) throw SecurityException()
         updateForeground(camera = enabled)
         check(withContext(Dispatchers.IO) { current.localParticipant.setCameraEnabled(enabled) })
     }
@@ -293,7 +299,8 @@ class CallService : Service() {
         val selectedFps = if (fps == 60) 60 else 30
         val selectedBitrate = bitrate.takeIf { it in setOf(12_000_000, 24_000_000, 40_000_000) } ?: 24_000_000
         val selectedCodec = codec.takeIf { it in setOf("h264", "vp9", "vp8") } ?: "h264"
-        if (appAudio && !current.localParticipant.isMicrophoneEnabled) {
+        val captureAppAudio = appAudio && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
+        if (captureAppAudio && !current.localParticipant.isMicrophoneEnabled) {
             mutableState.value = mutableState.value.copy(error = "Звук приложений передаётся вместе с микрофоном. Включите микрофон или начните показ без звука.")
             return@control
         }
@@ -314,8 +321,8 @@ class CallService : Service() {
         check(success)
         if (room !== current) return@control
         selectedScreenId = current.localParticipant.identity?.value
-        if (appAudio) {
-            if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+        if (appAudio && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
                 mutableState.value = mutableState.value.copy(error = "Экран передаётся без звука: разрешение микрофона отозвано.")
                 return@control
             }
@@ -381,7 +388,7 @@ class CallService : Service() {
 
     private fun detachScreenAudio(current: Room) {
         (current.localParticipant.getTrackPublication(Track.Source.MICROPHONE)?.track as? LocalAudioTrack)?.setAudioBufferCallback(null)
-        screenAudio?.releaseAudioResources()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) screenAudio?.releaseAudioResources()
         screenAudio = null
     }
 
@@ -400,7 +407,7 @@ class CallService : Service() {
             try { previous.disconnect() } catch (_: Exception) { }
             try { previous.release() } catch (_: Exception) { }
         } else {
-            screenAudio?.releaseAudioResources()
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) screenAudio?.releaseAudioResources()
             screenAudio = null
         }
     }
@@ -414,7 +421,13 @@ class CallService : Service() {
         releaseRoom()
         releaseCallCpu()
         mutableState.value = CallState(phase = if (message == null) "ended" else "error", error = message)
-        if (foreground) stopForeground(STOP_FOREGROUND_REMOVE)
+        if (foreground) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) stopForeground(STOP_FOREGROUND_REMOVE)
+            else {
+                @Suppress("DEPRECATION")
+                stopForeground(true)
+            }
+        }
         foreground = false
         stopSelf()
     }
@@ -424,7 +437,7 @@ class CallService : Service() {
     @SuppressLint("WakelockTimeout")
     private fun holdCallCpu() {
         if (callWakeLock?.isHeld == true) return
-        callWakeLock = getSystemService(PowerManager::class.java)
+        callWakeLock = (getSystemService(Context.POWER_SERVICE) as PowerManager)
             .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "$packageName:call")
             .apply { setReferenceCounted(false); acquire() }
     }
@@ -436,15 +449,19 @@ class CallService : Service() {
 
     private fun updateForeground(microphone: Boolean = mutableState.value.microphone, camera: Boolean = mutableState.value.camera) {
         val state = mutableState.value
-        var type = ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
-        if (microphone) type = type or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
-        if (camera) type = type or ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
+        var type = 0
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) type = ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            if (microphone) type = type or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+            if (camera) type = type or ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
+        }
         val summary = listOf(state.channelId.orEmpty(), state.channelName, state.phase, microphone.toString(), camera.toString(), state.screen.toString()).joinToString("|")
         if (foreground && summary == notificationSummary) return
         val open = Intent(this, CallActivity::class.java).putExtra(EXTRA_CHANNEL_ID, state.channelId).putExtra(EXTRA_CHANNEL_NAME, state.channelName)
             .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-        val pendingOpen = PendingIntent.getActivity(this, 1, open, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-        val pendingLeave = PendingIntent.getService(this, 2, Intent(this, CallService::class.java).setAction(ACTION_LEAVE), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        val pendingFlags = PendingIntent.FLAG_UPDATE_CURRENT or if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0
+        val pendingOpen = PendingIntent.getActivity(this, 1, open, pendingFlags)
+        val pendingLeave = PendingIntent.getService(this, 2, Intent(this, CallService::class.java).setAction(ACTION_LEAVE), pendingFlags)
         val text = when (state.phase) {
             "connecting" -> "Подключаемся…"
             "reconnecting" -> "Восстанавливаем связь…"
@@ -454,17 +471,25 @@ class CallService : Service() {
                 if (state.screen) append(" · показ экрана")
             }
         }
-        val notification = Notification.Builder(this, CHANNEL)
+        @Suppress("DEPRECATION")
+        val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) Notification.Builder(this, CHANNEL) else Notification.Builder(this)
+        builder
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle(if (state.channelName.isBlank()) "Звонок Сигнала" else "Сигнал · ${state.channelName}")
             .setContentText(text)
             .setContentIntent(pendingOpen)
             .setOngoing(true)
+            .setOnlyAlertOnce(true)
             .setCategory(Notification.CATEGORY_CALL)
-            .setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE)
-            .addAction(Notification.Action.Builder(null, "Завершить", pendingLeave).build())
-            .build()
-        startForeground(NOTIFICATION_ID, notification, type)
+            .addAction(Notification.Action.Builder(R.drawable.ic_notification, "Завершить", pendingLeave).build())
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) builder.setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE)
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+            @Suppress("DEPRECATION")
+            builder.setPriority(Notification.PRIORITY_LOW)
+        }
+        val notification = builder.build()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) startForeground(NOTIFICATION_ID, notification, type)
+        else startForeground(NOTIFICATION_ID, notification)
         foreground = true
         notificationSummary = summary
     }

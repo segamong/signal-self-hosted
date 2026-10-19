@@ -1,31 +1,20 @@
 import { useEffect, useRef, useState } from 'react';
 import { PhoneCall, PhoneOff, Radio } from 'lucide-react';
 import './api';
+import { androidCommand, subscribeAndroidMessage } from './androidBridge';
+export { androidCommand } from './androidBridge';
 
 export type AndroidCallState = {type:'callState';channelId?:string;state:'idle'|'connecting'|'connected'|'reconnecting'|'disconnected'|'error';error?:string;requestId?:string};
-const listeners = new Set<(state:AndroidCallState)=>void>();
-let listeningBridge: typeof window.signalAndroidBridge;
 
 /** One native listener also reaches the workspace when no call stage is mounted. */
 export function subscribeAndroidCallState(listener:(state:AndroidCallState)=>void) {
-  const bridge=window.signalAndroidBridge;
-  if(bridge&&bridge!==listeningBridge) {
-    listeningBridge=bridge;
-    bridge.onmessage=event=>{
-      try {
-        const data=JSON.parse(event.data) as AndroidCallState;
+  return subscribeAndroidMessage(message=>{
+        const data=message as AndroidCallState;
         if(data.type!=='callState'||!['idle','connecting','connected','reconnecting','disconnected','error'].includes(data.state))return;
         if(data.channelId!==undefined&&(typeof data.channelId!=='string'||!/^[A-Za-z0-9_-]{1,100}$/.test(data.channelId)))return;
         if(data.error!==undefined&&typeof data.error!=='string')return;
-        for(const receive of listeners)receive(data);
-      }catch{/* Ignore unsupported native events. */}
-    };
-  }
-  listeners.add(listener);
-  return()=>{listeners.delete(listener);};
-}
-export function androidCommand(message:Record<string,unknown>) {
-  window.signalAndroidBridge?.postMessage(JSON.stringify(message));
+        listener(data);
+  });
 }
 
 export default function AndroidCallStage({channel,onLeave}:{channel:{id:string;name:string};onLeave:()=>void}) {

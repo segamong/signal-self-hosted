@@ -3,8 +3,10 @@ package cloud.signal.android
 import android.app.AlertDialog
 import android.content.ClipData
 import android.content.Intent
+import android.content.pm.PackageInfo
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.widget.LinearLayout
@@ -13,6 +15,7 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.core.content.FileProvider
+import androidx.core.content.pm.PackageInfoCompat
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -142,7 +145,9 @@ class AppUpdates(private val activity: ComponentActivity, private val scope: Cor
         var completed = false
         try {
             if (connection.responseCode != 200) throw IOException("APK unavailable")
-            val announced = connection.contentLengthLong
+            // getContentLengthLong is unavailable on Android 6. The metadata
+            // size and streamed byte count are still checked on every version.
+            val announced = connection.getHeaderField("Content-Length")?.toLongOrNull() ?: -1L
             if (announced >= 0 && announced != release.size) throw IOException("Unexpected APK size")
             val digest = MessageDigest.getInstance("SHA-256")
             connection.inputStream.use { input ->
@@ -181,15 +186,25 @@ class AppUpdates(private val activity: ComponentActivity, private val scope: Cor
     @Suppress("DEPRECATION")
     private fun verifySigning(apk: File, release: AndroidRelease) {
         val manager = activity.packageManager
-        val archive = manager.getPackageArchiveInfo(apk.absolutePath, PackageManager.GET_SIGNING_CERTIFICATES) ?: throw IOException("APK cannot be read")
-        val installed = manager.getPackageInfo(activity.packageName, PackageManager.GET_SIGNING_CERTIFICATES)
-        if (archive.packageName != activity.packageName || archive.longVersionCode != release.versionCode || archive.versionName != release.version || archive.longVersionCode <= installed.longVersionCode) throw IOException("Unexpected application version")
-        val current = installed.signingInfo?.apkContentsSigners?.map { it.toByteArray().toList() }?.toSet().orEmpty()
-        val next = archive.signingInfo?.apkContentsSigners?.map { it.toByteArray().toList() }?.toSet().orEmpty()
+        val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) PackageManager.GET_SIGNING_CERTIFICATES else PackageManager.GET_SIGNATURES
+        val archive = manager.getPackageArchiveInfo(apk.absolutePath, flags) ?: throw IOException("APK cannot be read")
+        val installed = manager.getPackageInfo(activity.packageName, flags)
+        val archiveCode = PackageInfoCompat.getLongVersionCode(archive)
+        if (archive.packageName != activity.packageName || archiveCode != release.versionCode || archive.versionName != release.version || archiveCode <= PackageInfoCompat.getLongVersionCode(installed)) throw IOException("Unexpected application version")
+        val current = signingCertificates(installed)
+        val next = signingCertificates(archive)
         if (current.isEmpty() || next != current) throw IOException("APK signing identity mismatch")
     }
 
-    private fun connection(file: String): HttpURLConnection = (URL("${SignalApi.SERVER_ORIGIN}/downloads/android/$file").openConnection() as HttpURLConnection).apply {
+    @Suppress("DEPRECATION")
+    private fun signingCertificates(info: PackageInfo): Set<List<Byte>> {
+        val signatures = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) info.signingInfo?.apkContentsSigners else info.signatures
+        // Older Android verifies the APK's v1 signature. Compare its full
+        // certificate set with the installed app rather than trusting a hash.
+        return signatures?.map { it.toByteArray().toList() }?.toSet().orEmpty()
+    }
+
+    private fun connection(file: String): HttpURLConnection = ServerTls.connection(URL("${SignalApi.SERVER_ORIGIN}/downloads/android/$file")).apply {
         instanceFollowRedirects = false
         connectTimeout = 15_000
         readTimeout = 30_000
@@ -201,18 +216,30 @@ class AppUpdates(private val activity: ComponentActivity, private val scope: Cor
 
     private fun requestInstall(apk: File) {
         if (closed || activity.isFinishing || !apk.isFile) return
-        if (activity.packageManager.canRequestPackageInstalls()) {
+        if (canInstallPackages()) {
             openInstaller(apk)
         } else {
             dialog = AlertDialog.Builder(activity).setTitle("Разрешение на обновление")
-                .setMessage("Разрешите Сигналу устанавливать обновления из вашего сервера в настройках Android. Каждая установка потребует вашего подтверждения.")
+                .setMessage(if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
+                    "Разрешите Сигналу устанавливать обновления из вашего сервера в настройках Android. Каждая установка потребует вашего подтверждения."
+                    else "В настройках безопасности Android разрешите установку приложений из неизвестных источников. Файл уже проверен: его подписал тот же разработчик, что и установленный Сигнал. После обновления можно снова отключить это разрешение.")
                 .setPositiveButton("Открыть настройки") { _, _ ->
                     try {
                         waitingForPermission = true
-                        activity.startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:${activity.packageName}")))
+                        val settings = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
+                            Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:${activity.packageName}"))
+                            else Intent(Settings.ACTION_SECURITY_SETTINGS)
+                        activity.startActivity(settings)
                     } catch (_: Exception) { waitingForPermission = false; showMessage("Настройки недоступны", "Откройте настройки Android и разрешите установку обновлений для Сигнала.") }
                 }.setNegativeButton("Отмена", null).show()
         }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun canInstallPackages(): Boolean = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        activity.packageManager.canRequestPackageInstalls()
+    } else {
+        Settings.Secure.getInt(activity.contentResolver, Settings.Secure.INSTALL_NON_MARKET_APPS, 0) == 1
     }
 
     fun onResume() {
@@ -220,7 +247,7 @@ class AppUpdates(private val activity: ComponentActivity, private val scope: Cor
         waitingForPermission = false
         val apk = pendingInstall ?: return
         val release = pendingRelease ?: return
-        if (!activity.packageManager.canRequestPackageInstalls()) {
+        if (!canInstallPackages()) {
             Toast.makeText(activity, "Разрешение на установку не предоставлено.", Toast.LENGTH_LONG).show()
             return
         }

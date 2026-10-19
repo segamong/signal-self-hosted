@@ -3,23 +3,42 @@ package cloud.signal.android
 import android.net.Uri
 import android.webkit.CookieManager
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.io.IOException
-import java.net.HttpURLConnection
 import java.net.URL
+import kotlin.coroutines.resume
 
 data class JoinCredentials(val url: String, val token: String)
 data class SignalUser(val id: String, val username: String)
+data class SignalApiResponse(val status: Int, val data: JSONObject)
 class SignalApiException(val status: Int, message: String) : IOException(message)
 
 object SignalApi {
     const val SERVER_ORIGIN = "https://13.143.172.92:9443"
     private val identifier = Regex("[A-Za-z0-9_-]{1,100}")
     private val username = Regex("[A-Za-z0-9_-]{3,32}")
+    private val apiPath = Regex("/api/[A-Za-z0-9_-]+(?:/[A-Za-z0-9_-]+)*(?:\\?before=[1-9][0-9]{0,14})?")
 
     fun validChannelId(value: String): Boolean = identifier.matches(value)
+    fun validApiPath(value: String): Boolean = value.length <= 512 && apiPath.matches(value)
+
+    suspend fun sessionCookie(): String? = withContext(Dispatchers.Main.immediate) {
+        CookieManager.getInstance().getCookie(SERVER_ORIGIN)?.takeIf { it.isNotBlank() }
+    }
+
+    suspend fun saveCookies(values: List<String>) = withContext(Dispatchers.Main.immediate) {
+        val manager = CookieManager.getInstance()
+        for (value in values) {
+            if (value.length > 8192) continue
+            suspendCancellableCoroutine { continuation ->
+                manager.setCookie(SERVER_ORIGIN, value) { if (continuation.isActive) continuation.resume(Unit) }
+            }
+        }
+        if (values.isNotEmpty()) manager.flush()
+    }
 
     suspend fun joinChannel(channelId: String): JoinCredentials {
         require(validChannelId(channelId)) { "Некорректный канал." }
@@ -54,8 +73,13 @@ object SignalApi {
         return SignalUser(id, name)
     }
 
-    private suspend fun request(path: String, body: JSONObject? = null): JSONObject = withContext(Dispatchers.IO) {
-        val connection = URL(SERVER_ORIGIN + path).openConnection() as HttpURLConnection
+    suspend fun requestApi(path: String, body: JSONObject? = null): SignalApiResponse {
+        require(validApiPath(path)) { "Некорректный запрос." }
+        val cookie = sessionCookie()
+        val bytes = body?.toString()?.toByteArray(Charsets.UTF_8)
+        require(bytes == null || bytes.size <= 32_768) { "Запрос слишком большой." }
+        return withContext(Dispatchers.IO) {
+        val connection = ServerTls.connection(URL(SERVER_ORIGIN + path))
         try {
             connection.instanceFollowRedirects = false
             connection.connectTimeout = 15_000
@@ -65,15 +89,17 @@ object SignalApi {
             connection.setRequestProperty("Accept", "application/json")
             connection.setRequestProperty("Origin", SERVER_ORIGIN)
             connection.setRequestProperty("User-Agent", "SignalAndroid/${BuildConfig.VERSION_NAME}")
-            CookieManager.getInstance().getCookie(SERVER_ORIGIN)?.takeIf { it.isNotBlank() }?.let { connection.setRequestProperty("Cookie", it) }
-            if (body != null) {
-                val bytes = body.toString().toByteArray(Charsets.UTF_8)
+            cookie?.let { connection.setRequestProperty("Cookie", it) }
+            if (bytes != null) {
                 connection.doOutput = true
                 connection.setRequestProperty("Content-Type", "application/json")
                 connection.setFixedLengthStreamingMode(bytes.size)
                 connection.outputStream.use { it.write(bytes) }
             }
             val status = connection.responseCode
+            saveCookies(connection.headerFields.entries
+                .filter { it.key?.equals("Set-Cookie", ignoreCase = true) == true }
+                .flatMap { it.value.orEmpty() })
             val stream = if (status in 200..299) connection.inputStream else connection.errorStream
             val text = stream?.use { input ->
                 val result = ByteArrayOutputStream()
@@ -86,13 +112,14 @@ object SignalApi {
                 }
                 result.toString(Charsets.UTF_8.name())
             }.orEmpty()
-            val data = runCatching { JSONObject(text) }.getOrNull()
+            val data = if (status == 204) JSONObject() else runCatching { JSONObject(text) }.getOrNull()
             if (status !in 200..299) {
                 val message = data?.optString("error")?.takeIf { it.isNotBlank() && it.length <= 300 && !it.contains(Regex("https?://|wss?://|access_token|Bearer|eyJ", RegexOption.IGNORE_CASE)) }
                     ?: if (status == 401) "Войдите в аккаунт ещё раз." else "Не удалось выполнить запрос к серверу."
-                throw SignalApiException(status, message)
+                SignalApiResponse(status, JSONObject().put("error", message))
+            } else {
+                SignalApiResponse(status, data ?: throw IOException("Сервер вернул неожиданный ответ."))
             }
-            data ?: throw IOException("Сервер вернул неожиданный ответ.")
         } catch (error: SignalApiException) {
             throw error
         } catch (error: IOException) {
@@ -100,5 +127,12 @@ object SignalApi {
         } finally {
             connection.disconnect()
         }
+        }
+    }
+
+    private suspend fun request(path: String, body: JSONObject? = null): JSONObject {
+        val response = requestApi(path, body)
+        if (response.status !in 200..299) throw SignalApiException(response.status, response.data.optString("error", "Не удалось выполнить запрос к серверу."))
+        return response.data
     }
 }

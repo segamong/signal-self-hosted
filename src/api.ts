@@ -1,3 +1,4 @@
+import { androidApi } from './androidBridge';
 export const SERVER_ORIGIN = 'https://13.143.172.92:9443';
 
 type DesktopEvent = {type:string;[key:string]:unknown};
@@ -29,6 +30,12 @@ declare global {
 }
 
 export async function api<T>(path:string,body?:unknown):Promise<T> {
+  if(window.signalAndroidBridge) {
+    const result = await androidApi(`/api${path}`,body);
+    if(result.status===204)return undefined as T;
+    if(result.status<200||result.status>=300)throw new Error(result.data?.error||'Не удалось связаться с сервером.');
+    return result.data as T;
+  }
   if(window.signalDesktop) {
     const result = await window.signalDesktop.requestApi(`/api${path}`,body);
     if(result.status===204)return undefined as T;

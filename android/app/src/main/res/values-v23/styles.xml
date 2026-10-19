@@ -1,0 +1,5 @@
+<resources>
+    <style name="Theme.Signal" parent="Theme.Signal.Base">
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+</resources>

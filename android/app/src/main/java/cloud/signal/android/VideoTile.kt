@@ -6,6 +6,7 @@ import android.content.Context
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.os.Build
 import android.text.TextUtils
 import android.view.GestureDetector
 import android.view.Gravity
@@ -267,9 +268,15 @@ class VideoTile(context: Context, private val room: Room) : FrameLayout(context)
                 dialog.window?.apply {
                     setLayout(WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT)
                     addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-                    insetsController?.apply {
-                        systemBarsBehavior = WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-                        hide(WindowInsets.Type.systemBars())
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                        insetsController?.apply {
+                            systemBarsBehavior = WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                            hide(WindowInsets.Type.systemBars())
+                        }
+                    } else {
+                        @Suppress("DEPRECATION")
+                        decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_FULLSCREEN or
+                            View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
                     }
                 }
                 track.addRenderer(video)
@@ -293,7 +300,8 @@ class VideoTile(context: Context, private val room: Room) : FrameLayout(context)
             isClickable = true
             isFocusable = true
             val selectable = android.util.TypedValue()
-            if (context.theme.resolveAttribute(android.R.attr.selectableItemBackgroundBorderless, selectable, true) &&
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M &&
+                context.theme.resolveAttribute(android.R.attr.selectableItemBackgroundBorderless, selectable, true) &&
                 selectable.resourceId != 0
             ) {
                 foreground = context.getDrawable(selectable.resourceId)
