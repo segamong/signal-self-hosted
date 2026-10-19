@@ -1,6 +1,7 @@
 package cloud.signal.android
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -12,6 +13,7 @@ import android.content.pm.ServiceInfo
 import android.net.Uri
 import android.os.Binder
 import android.os.IBinder
+import android.os.PowerManager
 import com.twilio.audioswitch.AudioDevice
 import com.twilio.audioswitch.AudioDeviceChangeListener
 import io.livekit.android.LiveKit
@@ -94,8 +96,9 @@ class CallService : Service() {
     private var selectedScreenId: String? = null
     private var screenAudio: ScreenAudioCapturer? = null
     private var foreground = false
+    private var callWakeLock: PowerManager.WakeLock? = null
     private var notificationSummary = ""
-    private val audioDevicesListener = AudioDeviceChangeListener { _, selected ->
+    private val audioDevicesListener: AudioDeviceChangeListener = { _, selected ->
         scope.launch {
             mutableState.value = mutableState.value.copy(speaker = selected is AudioDevice.Speakerphone)
         }
@@ -148,6 +151,7 @@ class CallService : Service() {
         selectedScreenId = null
         mutableState.value = CallState(channelId, channelName, phase = "connecting")
         updateForeground()
+        holdCallCpu()
         connectJob = scope.launch {
             try {
                 val user = SignalApi.currentUser() ?: throw IllegalStateException("authentication")
@@ -311,6 +315,10 @@ class CallService : Service() {
         if (room !== current) return@control
         selectedScreenId = current.localParticipant.identity?.value
         if (appAudio) {
+            if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+                mutableState.value = mutableState.value.copy(error = "Экран передаётся без звука: разрешение микрофона отозвано.")
+                return@control
+            }
             val screenTrack = current.localParticipant.getTrackPublication(Track.Source.SCREEN_SHARE)?.track
             val microphone = current.localParticipant.getTrackPublication(Track.Source.MICROPHONE)?.track as? LocalAudioTrack
             val capturer = ScreenAudioCapturer.createFromScreenShareTrack(screenTrack)
@@ -404,10 +412,26 @@ class CallService : Service() {
         connectJob?.cancel()
         connectJob = null
         releaseRoom()
+        releaseCallCpu()
         mutableState.value = CallState(phase = if (message == null) "ended" else "error", error = message)
         if (foreground) stopForeground(STOP_FOREGROUND_REMOVE)
         foreground = false
         stopSelf()
+    }
+
+    // A foreground service alone does not keep packet processing running when
+    // the display sleeps. The service owns this lock only for an active call.
+    @SuppressLint("WakelockTimeout")
+    private fun holdCallCpu() {
+        if (callWakeLock?.isHeld == true) return
+        callWakeLock = getSystemService(PowerManager::class.java)
+            .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "$packageName:call")
+            .apply { setReferenceCounted(false); acquire() }
+    }
+
+    private fun releaseCallCpu() {
+        callWakeLock?.let { if (it.isHeld) it.release() }
+        callWakeLock = null
     }
 
     private fun updateForeground(microphone: Boolean = mutableState.value.microphone, camera: Boolean = mutableState.value.camera) {
@@ -431,7 +455,7 @@ class CallService : Service() {
             }
         }
         val notification = Notification.Builder(this, CHANNEL)
-            .setSmallIcon(android.R.drawable.stat_sys_phone_call)
+            .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle(if (state.channelName.isBlank()) "Звонок Сигнала" else "Сигнал · ${state.channelName}")
             .setContentText(text)
             .setContentIntent(pendingOpen)
@@ -448,6 +472,7 @@ class CallService : Service() {
     override fun onDestroy() {
         ++generation
         releaseRoom()
+        releaseCallCpu()
         scope.cancel()
         if (mutableState.value.phase in ACTIVE_PHASES) mutableState.value = CallState(phase = "ended")
         super.onDestroy()

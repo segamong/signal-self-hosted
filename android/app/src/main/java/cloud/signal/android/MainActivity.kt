@@ -9,10 +9,13 @@ import android.view.View
 import android.view.ViewGroup
 import android.webkit.CookieManager
 import android.webkit.PermissionRequest
+import android.webkit.RenderProcessGoneDetail
+import android.webkit.MimeTypeMap
 import android.webkit.SslErrorHandler
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.Button
@@ -37,7 +40,7 @@ import org.json.JSONObject
 
 class MainActivity : ComponentActivity() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-    private lateinit var webView: WebView
+    private var webView: WebView? = null
     private lateinit var progress: ProgressBar
     private lateinit var errorPanel: LinearLayout
     private lateinit var errorText: TextView
@@ -45,12 +48,14 @@ class MainActivity : ComponentActivity() {
     private var reply: JavaScriptReplyProxy? = null
     private var destroyed = false
     private val invitation = Regex("[A-Za-z0-9_-]{32}")
+    private val bundledWebFiles by lazy { bundledFiles("web").map { "/" + it.removePrefix("web/") }.toSet() }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         updater = AppUpdates(this, scope)
+        updater.restoreState(savedInstanceState)
         val root = FrameLayout(this).apply { setBackgroundColor(Color.rgb(23, 24, 33)) }
-        webView = WebView(this).apply {
+        val content = WebView(this).apply {
             setBackgroundColor(Color.rgb(23, 24, 33))
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
@@ -65,7 +70,8 @@ class MainActivity : ComponentActivity() {
             CookieManager.getInstance().setAcceptCookie(true)
             CookieManager.getInstance().setAcceptThirdPartyCookies(this, false)
         }
-        root.addView(webView, FrameLayout.LayoutParams(-1, -1))
+        webView = content
+        root.addView(content, FrameLayout.LayoutParams(-1, -1))
         progress = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply { max = 100 }
         root.addView(progress, FrameLayout.LayoutParams(-1, dp(3)))
         errorPanel = LinearLayout(this).apply {
@@ -79,7 +85,10 @@ class MainActivity : ComponentActivity() {
         errorPanel.addView(errorText, LinearLayout.LayoutParams(-1, -2))
         errorPanel.addView(Button(this).apply {
             text = "Повторить подключение"
-            setOnClickListener { errorPanel.visibility = View.GONE; webView.loadUrl(SignalApi.SERVER_ORIGIN + "/") }
+            setOnClickListener {
+                errorPanel.visibility = View.GONE
+                webView?.loadUrl(SignalApi.SERVER_ORIGIN + "/") ?: recreate()
+            }
         }, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(20) })
         root.addView(errorPanel, FrameLayout.LayoutParams(-1, -1))
         ViewCompat.setOnApplyWindowInsetsListener(root) { view, insets ->
@@ -89,14 +98,15 @@ class MainActivity : ComponentActivity() {
             insets
         }
         setContentView(root)
-        webView.webChromeClient = object : WebChromeClient() {
+        content.webChromeClient = object : WebChromeClient() {
             override fun onProgressChanged(view: WebView?, newProgress: Int) {
                 progress.progress = newProgress
                 progress.visibility = if (newProgress == 100) View.GONE else View.VISIBLE
             }
             override fun onPermissionRequest(request: PermissionRequest) { request.deny() }
         }
-        webView.webViewClient = object : WebViewClient() {
+        content.webViewClient = object : WebViewClient() {
+            override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest): WebResourceResponse? = bundledResponse(request)
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                 if (trusted(request.url)) return false
                 if (request.isForMainFrame) external(request.url)
@@ -111,12 +121,23 @@ class MainActivity : ComponentActivity() {
             override fun onReceivedError(view: WebView?, request: WebResourceRequest, error: WebResourceError?) {
                 if (request.isForMainFrame) showError("Сервер пока недоступен. Проверьте интернет и повторите подключение.")
             }
+            override fun onReceivedHttpError(view: WebView?, request: WebResourceRequest, errorResponse: WebResourceResponse?) {
+                if (request.isForMainFrame) showError("Сервер временно не отвечает. Повторите подключение через несколько секунд.")
+            }
+            override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
+                // A low-memory WebView restart must not terminate the native call.
+                if (webView === view) { webView = null; reply = null }
+                (view.parent as? ViewGroup)?.removeView(view)
+                view.destroy()
+                showError("Окно переписки было выгружено Android. Звонок продолжает работать. Нажмите «Повторить подключение», чтобы открыть переписку.")
+                return true
+            }
         }
         if (!WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
             showError("Обновите Android System WebView или Chrome в магазине приложений, чтобы открыть Сигнал.")
             return
         }
-        WebViewCompat.addWebMessageListener(webView, "signalAndroidBridge", setOf(SignalApi.SERVER_ORIGIN)) { _, message, sourceOrigin, isMainFrame, proxy ->
+        WebViewCompat.addWebMessageListener(content, "signalAndroidBridge", setOf(SignalApi.SERVER_ORIGIN)) { _, message, sourceOrigin, isMainFrame, proxy ->
             if (destroyed || !isMainFrame || !trusted(sourceOrigin)) return@addWebMessageListener
             val text = runCatching { message.data }.getOrNull() ?: return@addWebMessageListener
             if (text.length > 1024) return@addWebMessageListener
@@ -127,8 +148,13 @@ class MainActivity : ComponentActivity() {
                     val id = data.optString("channelId")
                     val name = data.optString("channelName").take(40).filter { !it.isISOControl() }
                     if (!SignalApi.validChannelId(id)) return@addWebMessageListener
-                    startActivity(Intent(this, CallActivity::class.java).putExtra("channelId", id).putExtra("channelName", name.ifBlank { "Канал" }))
-                    sendCallState()
+                    try {
+                        startActivity(Intent(this, CallActivity::class.java).putExtra("channelId", id).putExtra("channelName", name.ifBlank { "Канал" }))
+                        if (CallService.activeState.value.phase in setOf("connected", "connecting", "reconnecting")) sendCallState()
+                        else reply?.postMessage(JSONObject().put("type", "callState").put("state", "connecting").put("channelId", id).toString())
+                    } catch (_: Exception) {
+                        reply?.postMessage(JSONObject().put("type", "callState").put("state", "error").put("channelId", id).put("error", "Не удалось открыть звонок. Повторите попытку.").toString())
+                    }
                 }
                 "leaveCall" -> {
                     // A normal start command reaches the existing foreground
@@ -136,19 +162,51 @@ class MainActivity : ComponentActivity() {
                     if (CallService.activeState.value.channelId != null) startService(Intent(this, CallService::class.java).setAction(CallService.ACTION_LEAVE))
                     sendCallState()
                 }
-                "getCallState" -> sendCallState()
+                "getCallState" -> sendCallState(data.optString("requestId").takeIf { it.length in 1..120 })
                 "checkUpdate" -> updater.check()
             }
         }
         scope.launch { CallService.activeState.collect { sendCallState() } }
-        val restored = savedInstanceState != null && webView.restoreState(savedInstanceState) != null
+        val restored = savedInstanceState != null && content.restoreState(savedInstanceState) != null
         val deepLink = inviteUrl(intent?.data)
-        if (deepLink != null) webView.loadUrl(deepLink)
-        else if (!restored || !trusted(Uri.parse(webView.url.orEmpty()))) webView.loadUrl(SignalApi.SERVER_ORIGIN + "/")
+        if (deepLink != null) content.loadUrl(deepLink)
+        else if (!restored || !trusted(Uri.parse(content.url.orEmpty()))) content.loadUrl(SignalApi.SERVER_ORIGIN + "/")
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) { override fun handleOnBackPressed() { goBack() } })
     }
 
     private fun trusted(uri: Uri): Boolean = uri.scheme == "https" && uri.host == "13.143.172.92" && uri.port == 9443 && uri.userInfo == null
+
+    private fun bundledFiles(folder: String): List<String> = assets.list(folder).orEmpty().flatMap { child ->
+        val path = "$folder/$child"
+        if (assets.list(path).orEmpty().isNotEmpty()) bundledFiles(path) else listOf(path)
+    }
+
+    private fun bundledResponse(request: WebResourceRequest): WebResourceResponse? {
+        if (request.method != "GET" || !trusted(request.url)) return null
+        val path = request.url.path ?: return null
+        val file = if (path == "/") "/index.html" else path
+        // Only files shipped in this APK may be served locally. The API, media
+        // signalling, downloads and every other server route stay on the network.
+        if (file != "/index.html" && file != "/signal.svg" && !file.startsWith("/assets/")) return null
+        if (file !in bundledWebFiles) return null
+        val mime = when (file.substringAfterLast('.').lowercase()) {
+            "html" -> "text/html"
+            "js", "mjs" -> "text/javascript"
+            "css" -> "text/css"
+            "svg" -> "image/svg+xml"
+            "json" -> "application/json"
+            else -> MimeTypeMap.getSingleton().getMimeTypeFromExtension(file.substringAfterLast('.').lowercase()) ?: "application/octet-stream"
+        }
+        val encoding = if (mime.startsWith("text/") || mime == "image/svg+xml" || mime == "application/json") "utf-8" else null
+        return runCatching {
+            WebResourceResponse(mime, encoding, 200, "OK", mapOf(
+                "Cache-Control" to "no-store",
+                "X-Content-Type-Options" to "nosniff",
+                "Referrer-Policy" to "same-origin",
+                "Content-Security-Policy" to "default-src 'self'; base-uri 'self'; frame-ancestors 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' wss://13.143.172.92:9443; worker-src 'self' blob:; object-src 'none'",
+            ), assets.open("web$file"))
+        }.getOrNull()
+    }
 
     private fun inviteUrl(uri: Uri?): String? {
         if (uri == null) return null
@@ -157,13 +215,13 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun external(uri: Uri) {
-        inviteUrl(uri)?.let { webView.loadUrl(it); return }
+        inviteUrl(uri)?.let { webView?.loadUrl(it); return }
         if (uri.scheme != "https" && uri.scheme != "http") return
         try { startActivity(Intent(Intent.ACTION_VIEW, uri).addCategory(Intent.CATEGORY_BROWSABLE)) }
         catch (_: Exception) { Toast.makeText(this, "Не удалось открыть браузер.", Toast.LENGTH_SHORT).show() }
     }
 
-    private fun sendCallState() {
+    private fun sendCallState(requestId: String? = null) {
         if (destroyed) return
         val current = CallService.activeState.value
         val state = when (current.phase) {
@@ -172,25 +230,27 @@ class MainActivity : ComponentActivity() {
             else -> "idle"
         }
         val data = JSONObject().put("type", "callState").put("state", state)
+        requestId?.let { data.put("requestId", it) }
         current.channelId?.let { data.put("channelId", it) }
-        if (state == "error") data.put("error", "Не удалось подключиться к звонку. Откройте комнату и повторите попытку.")
+        if (state == "error") data.put("error", current.error?.take(300)?.filter { !it.isISOControl() } ?: "Не удалось подключиться к звонку. Откройте комнату и повторите попытку.")
         runCatching { reply?.postMessage(data.toString()) }
     }
 
     private fun showError(message: String) { errorText.text = message; errorPanel.visibility = View.VISIBLE; progress.visibility = View.GONE }
-    private fun goBack() { if (webView.canGoBack()) webView.goBack() else moveTaskToBack(true) }
+    private fun goBack() { val content = webView; if (content?.canGoBack() == true) content.goBack() else moveTaskToBack(true) }
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
 
-    override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); setIntent(intent); inviteUrl(intent.data)?.let { errorPanel.visibility = View.GONE; webView.loadUrl(it) } }
+    override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); setIntent(intent); inviteUrl(intent.data)?.let { errorPanel.visibility = View.GONE; webView?.loadUrl(it) ?: recreate() } }
     override fun onResume() { super.onResume(); if (::updater.isInitialized) updater.onResume(); sendCallState() }
     override fun onPause() { CookieManager.getInstance().flush(); super.onPause() }
-    override fun onSaveInstanceState(outState: Bundle) { webView.saveState(outState); super.onSaveInstanceState(outState) }
+    override fun onSaveInstanceState(outState: Bundle) { webView?.saveState(outState); updater.saveState(outState); super.onSaveInstanceState(outState) }
     override fun onDestroy() {
         destroyed = true
         reply = null
         if (::updater.isInitialized) updater.close()
         scope.cancel()
-        if (::webView.isInitialized) { (webView.parent as? ViewGroup)?.removeView(webView); webView.destroy() }
+        webView?.let { (it.parent as? ViewGroup)?.removeView(it); it.destroy() }
+        webView = null
         super.onDestroy()
     }
 }

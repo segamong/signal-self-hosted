@@ -5,6 +5,7 @@ import android.content.ClipData
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Bundle
 import android.provider.Settings
 import android.widget.LinearLayout
 import android.widget.ProgressBar
@@ -34,11 +35,12 @@ class AppUpdates(private val activity: ComponentActivity, private val scope: Cor
     private var operation: Job? = null
     private var dialog: AlertDialog? = null
     private var pendingInstall: File? = null
+    private var pendingRelease: AndroidRelease? = null
     private var waitingForPermission = false
     private var closed = false
 
     fun check() {
-        if (closed || activity.isFinishing || operation?.isActive == true) return
+        if (closed || activity.isFinishing || operation?.isCompleted == false) return
         progressDialog("Проверяем обновление…")
         operation = scope.launch {
             try {
@@ -64,7 +66,7 @@ class AppUpdates(private val activity: ComponentActivity, private val scope: Cor
     }
 
     private fun download(release: AndroidRelease) {
-        if (closed || activity.isFinishing || operation?.isActive == true) return
+        if (closed || activity.isFinishing || operation?.isCompleted == false) return
         val label = progressDialog("Загружаем Сигнал ${release.version}…")
         operation = scope.launch {
             try {
@@ -75,6 +77,7 @@ class AppUpdates(private val activity: ComponentActivity, private val scope: Cor
                 }
                 dismissDialog()
                 pendingInstall = apk
+                pendingRelease = release
                 requestInstall(apk)
             } catch (_: CancellationException) {
                 dismissDialog()
@@ -100,17 +103,35 @@ class AppUpdates(private val activity: ComponentActivity, private val scope: Cor
                 }
                 output.toByteArray()
             }
-            val json = JSONObject(bytes.toString(Charsets.UTF_8))
-            val version = json.optString("version")
-            val code = json.optLong("versionCode", -1)
-            val file = json.optString("file")
-            val hash = json.optString("sha256").lowercase()
-            val size = json.optLong("size", -1)
-            if (!Regex("[0-9]+\\.[0-9]+\\.[0-9]+(?:-[A-Za-z0-9.-]+)?").matches(version) || code !in 1..2_100_000_000L || !Regex("Signal-Android-[A-Za-z0-9._-]+\\.apk").matches(file) || !Regex("[a-f0-9]{64}").matches(hash) || size !in 1..200_000_000L) {
-                throw IOException("Invalid update metadata")
-            }
-            return AndroidRelease(version, code, file, hash, size)
+            return parseRelease(JSONObject(bytes.toString(Charsets.UTF_8)))
         } finally { connection.disconnect() }
+    }
+
+    private fun parseRelease(json: JSONObject): AndroidRelease {
+        val version = json.optString("version")
+        val code = json.optLong("versionCode", -1)
+        val file = json.optString("file")
+        val hash = json.optString("sha256").lowercase()
+        val size = json.optLong("size", -1)
+        if (!Regex("[0-9]+\\.[0-9]+\\.[0-9]+(?:-[A-Za-z0-9.-]+)?").matches(version) || code !in 1..2_100_000_000L || !Regex("Signal-Android-[A-Za-z0-9._-]+\\.apk").matches(file) || !Regex("[a-f0-9]{64}").matches(hash) || size !in 1..200_000_000L) throw IOException("Invalid update metadata")
+        return AndroidRelease(version, code, file, hash, size)
+    }
+
+    fun saveState(state: Bundle) {
+        val release = pendingRelease ?: return
+        if (!waitingForPermission) return
+        state.putString("signal.update.pending", JSONObject().put("version", release.version).put("versionCode", release.versionCode).put("file", release.filename).put("sha256", release.sha256).put("size", release.size).toString())
+    }
+
+    fun restoreState(state: Bundle?) {
+        val text = state?.getString("signal.update.pending") ?: return
+        val release = runCatching { parseRelease(JSONObject(text)) }.getOrNull() ?: return
+        val apk = File(File(activity.cacheDir, "updates"), release.filename)
+        if (apk.isFile && apk.length() == release.size && release.versionCode > BuildConfig.VERSION_CODE) {
+            pendingRelease = release
+            pendingInstall = apk
+            waitingForPermission = true
+        }
     }
 
     private suspend fun downloadAndVerify(release: AndroidRelease, onProgress: (Int) -> Unit): File {
@@ -198,8 +219,37 @@ class AppUpdates(private val activity: ComponentActivity, private val scope: Cor
         if (closed || !waitingForPermission) return
         waitingForPermission = false
         val apk = pendingInstall ?: return
-        if (activity.packageManager.canRequestPackageInstalls()) openInstaller(apk)
-        else Toast.makeText(activity, "Разрешение на установку не предоставлено.", Toast.LENGTH_LONG).show()
+        val release = pendingRelease ?: return
+        if (!activity.packageManager.canRequestPackageInstalls()) {
+            Toast.makeText(activity, "Разрешение на установку не предоставлено.", Toast.LENGTH_LONG).show()
+            return
+        }
+        operation = scope.launch {
+            try {
+                // Android may recreate the Activity while its settings are open.
+                // Verify the saved file again before granting it to the installer.
+                withContext(Dispatchers.IO) {
+                    if (!apk.isFile || apk.length() != release.size) throw IOException("Cached update changed")
+                    val digest = MessageDigest.getInstance("SHA-256")
+                    apk.inputStream().use { input ->
+                        val buffer = ByteArray(65536)
+                        while (true) {
+                            coroutineContext.ensureActive()
+                            val count = input.read(buffer)
+                            if (count < 0) break
+                            digest.update(buffer, 0, count)
+                        }
+                    }
+                    if (digest.digest().joinToString("") { "%02x".format(it.toInt() and 0xff) } != release.sha256) throw IOException("Cached update integrity mismatch")
+                    verifySigning(apk, release)
+                }
+                openInstaller(apk)
+            } catch (_: CancellationException) {
+                // The next manual check can resume after Activity recreation.
+            } catch (_: Exception) {
+                showMessage("Обновление не установлено", "Файл обновления больше недоступен или не прошёл проверку. Проверьте обновления ещё раз.")
+            }
+        }
     }
 
     private fun openInstaller(apk: File) {

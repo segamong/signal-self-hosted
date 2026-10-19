@@ -9,7 +9,7 @@ import { ChannelSettings } from './ChannelSettings';
 import { UserProfile } from './UserProfile';
 import { MessageContent, type MessageData } from './MessageContent';
 import { PinnedMessages } from './PinnedMessages';
-import AndroidCallStage, { androidCommand } from './AndroidCallStage';
+import AndroidCallStage, { androidCommand, subscribeAndroidCallState } from './AndroidCallStage';
 import { clearCallSession, readCallSession, saveCallSession, DEFAULT_CALL_PREFERENCES, type CallPreferences } from './callSession';
 const CallStage = lazy(() => import('./CallStage'));
 type User = {
@@ -149,7 +149,8 @@ function App() {
     const updateChannels = (next: Channel[]) => { channelsRevision.current++; setChannelsLoaded(true); setChannels(next); setSelected(old => next.some(c => c.id === old) ? old : next[0]?.id || ''); };
     function mutateChannels(action: (old: Channel[]) => Channel[]) { channelsRevision.current++; setChannels(action); }
     const canManageChannel = channel?.role === 'owner' || channel?.role === 'admin';
-    function stopCall() { androidCommand({type:'leaveCall'}); callIdRef.current = undefined; clearCallSession(); setCall(null); callPreferences.current = DEFAULT_CALL_PREFERENCES; setInitialCallPreferences(DEFAULT_CALL_PREFERENCES); }
+    function clearCallUi() { callIdRef.current = undefined; clearCallSession(); setCall(null); callPreferences.current = DEFAULT_CALL_PREFERENCES; setInitialCallPreferences(DEFAULT_CALL_PREFERENCES); }
+    function stopCall() { androidCommand({type:'leaveCall'}); clearCallUi(); }
     function startCall(next: Channel) {
         if (!user)
             return;
@@ -179,6 +180,10 @@ function App() {
         }
         if (!channelsLoaded || restoredCallUser.current === user.id)
             return;
+        // The native foreground service owns Android calls and survives WebView
+        // reloads. Browser session storage can contain a call already ended there.
+        if (window.signalAndroidBridge)
+            return;
         restoredCallUser.current = user.id;
         const saved = readCallSession(user.id);
         if (!saved)
@@ -193,6 +198,45 @@ function App() {
         setInitialCallPreferences(saved.preferences);
         setCall(next);
         setSelected(next.id);
+    }, [user, booting, bootError, channelsLoaded, channels]);
+    useEffect(() => {
+        if (!window.signalAndroidBridge || booting || bootError)
+            return;
+        if (!user) {
+            androidCommand({type:'leaveCall'});
+            clearCallUi();
+            return;
+        }
+        if (!channelsLoaded)
+            return;
+        const requestId = `restore:${user.id}`;
+        const unsubscribe = subscribeAndroidCallState(state => {
+            if (authUserId.current !== user.id)
+                return;
+            if (['connected', 'connecting', 'reconnecting'].includes(state.state) && state.channelId) {
+                const nativeChannel = channels.find(item => item.id === state.channelId);
+                if (!nativeChannel)
+                    return;
+                if (callIdRef.current !== nativeChannel.id) {
+                    callIdRef.current = nativeChannel.id;
+                    callPreferences.current = { ...DEFAULT_CALL_PREFERENCES };
+                    setInitialCallPreferences(callPreferences.current);
+                    setCall(nativeChannel);
+                    saveCallSession(user.id, nativeChannel.id, callPreferences.current);
+                }
+            } else if (state.state === 'disconnected') {
+                clearCallUi();
+            } else if (state.requestId === requestId && !callIdRef.current) {
+                clearCallSession();
+            }
+        });
+        const refresh = () => androidCommand({type:'getCallState', requestId});
+        // Query even without a mounted call stage, including after the Android
+        // process recreates the workspace with fresh browser session storage.
+        refresh();
+        const onVisible = () => { if (document.visibilityState === 'visible') refresh(); };
+        document.addEventListener('visibilitychange', onVisible);
+        return () => { unsubscribe(); document.removeEventListener('visibilitychange', onVisible); };
     }, [user, booting, bootError, channelsLoaded, channels]);
     useEffect(() => {
         if (!call || !channelsLoaded)

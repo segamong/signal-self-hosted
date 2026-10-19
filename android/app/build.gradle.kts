@@ -9,6 +9,7 @@ val canSignRelease = listOf(signingStorePath, signingStorePassword, signingAlias
 android {
     namespace = "cloud.signal.android"
     compileSdk { version = release(37) }
+    buildToolsVersion = "37.0.0"
     defaultConfig {
         applicationId = "cloud.signal.android"
         minSdk = 31
@@ -37,6 +38,7 @@ android {
         debug { applicationIdSuffix = ".debug"; versionNameSuffix = "-debug" }
     }
     buildFeatures { buildConfig = true }
+    sourceSets["main"].assets.directories.add(layout.buildDirectory.dir("generated/signalAssets").get().asFile.path)
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -44,6 +46,22 @@ android {
     packaging {
         resources.excludes += setOf("META-INF/AL2.0", "META-INF/LGPL2.1", "META-INF/LICENSE.md", "META-INF/LICENSE-notice.md")
         jniLibs.useLegacyPackaging = false
+    }
+}
+
+// The APK carries the matching chat UI while all API and media traffic still
+// uses the configured server. This avoids depending on its web UI version.
+val bundledWeb = layout.projectDirectory.dir("../../dist")
+val bundleSignalWeb = tasks.register<Sync>("bundleSignalWeb") {
+    from(bundledWeb)
+    into(layout.buildDirectory.dir("generated/signalAssets/web"))
+}
+tasks.named("preBuild") {
+    dependsOn(bundleSignalWeb)
+    doFirst {
+        check(bundledWeb.file("index.html").asFile.isFile) {
+            "Сначала соберите интерфейс из корня проекта: pnpm install --frozen-lockfile && pnpm build"
+        }
     }
 }
 

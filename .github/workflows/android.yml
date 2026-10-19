@@ -1,0 +1,120 @@
+name: Android APK
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - android/**
+      - src/**
+      - public/**
+      - package.json
+      - pnpm-lock.yaml
+      - index.html
+      - tsconfig.json
+      - vite.config.ts
+      - tools/prepare-android-release.mjs
+      - .github/workflows/android.yml
+  pull_request:
+    paths:
+      - android/**
+      - src/**
+      - public/**
+      - package.json
+      - pnpm-lock.yaml
+      - index.html
+      - tsconfig.json
+      - vite.config.ts
+      - tools/prepare-android-release.mjs
+      - .github/workflows/android.yml
+  workflow_dispatch:
+    inputs:
+      signed_release:
+        description: Build a release APK with the configured signing secrets
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  apk:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Install web dependencies
+        run: |
+          npm install --global pnpm@11.25.0
+          pnpm install --frozen-lockfile
+      - name: Build the bundled interface
+        run: pnpm build
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
+        with:
+          packages: 'platform-tools platforms;android-37.0 build-tools;37.0.0'
+          log-accepted-android-sdk-licenses: false
+      - name: Lint and build the installable debug APK
+        working-directory: android
+        run: bash ./gradlew --no-daemon --stacktrace lintDebug assembleDebug
+      - name: Upload debug APK
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: Signal-Android-debug-${{ github.run_number }}
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload lint report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: Android-lint-${{ github.run_number }}
+          path: android/app/build/reports/lint-results-debug.*
+          if-no-files-found: ignore
+          retention-days: 14
+      - name: Build the signed release APK
+        if: github.event_name == 'workflow_dispatch' && inputs.signed_release
+        env:
+          SIGNAL_ANDROID_KEYSTORE_BASE64: ${{ secrets.SIGNAL_ANDROID_KEYSTORE_BASE64 }}
+          SIGNAL_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.SIGNAL_ANDROID_KEYSTORE_PASSWORD }}
+          SIGNAL_ANDROID_KEY_ALIAS: ${{ secrets.SIGNAL_ANDROID_KEY_ALIAS }}
+          SIGNAL_ANDROID_KEY_PASSWORD: ${{ secrets.SIGNAL_ANDROID_KEY_PASSWORD }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          : "${SIGNAL_ANDROID_KEYSTORE_BASE64:?Set the Android signing secrets first}"
+          : "${SIGNAL_ANDROID_KEYSTORE_PASSWORD:?Missing keystore password}"
+          : "${SIGNAL_ANDROID_KEY_ALIAS:?Missing key alias}"
+          : "${SIGNAL_ANDROID_KEY_PASSWORD:?Missing key password}"
+          export SIGNAL_ANDROID_KEYSTORE="${RUNNER_TEMP}/signal-android-release.jks"
+          trap 'rm -f -- "$SIGNAL_ANDROID_KEYSTORE"' EXIT
+          umask 077
+          printf '%s' "$SIGNAL_ANDROID_KEYSTORE_BASE64" | base64 --decode > "$SIGNAL_ANDROID_KEYSTORE"
+          (cd android && bash ./gradlew --no-daemon --stacktrace assembleRelease)
+          "${ANDROID_HOME}/build-tools/37.0.0/apksigner" verify --verbose android/app/build/outputs/apk/release/app-release.apk
+          node tools/prepare-android-release.mjs
+      - name: Upload signed release and update metadata
+        if: github.event_name == 'workflow_dispatch' && inputs.signed_release
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: Signal-Android-release-${{ github.run_number }}
+          path: |
+            android/app/build/release/Signal-Android-*.apk
+            android/app/build/release/latest.json
+          if-no-files-found: error
+          retention-days: 14

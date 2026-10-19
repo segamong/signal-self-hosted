@@ -44,12 +44,16 @@ class CallActivity : ComponentActivity() {
     private var collectJob: Job? = null
     private var service: CallService? = null
     private var bound = false
+    private var visible = false
+    private var callRequested = true
     private var channelId = ""
     private var channelName = ""
     private var switchPrompt: String? = null
     private var currentState = CallState()
     private var pendingPermission: String? = null
+    private var grantedPermissionAction: String? = null
     private var screenRequest: ScreenRequest? = null
+    private var screenPermissionData: Intent? = null
     private var notificationRequested = false
     private var renderedRoom: Room? = null
     private val tiles = linkedMapOf<String, VideoTile>()
@@ -89,26 +93,25 @@ class CallActivity : ComponentActivity() {
             notice("Разрешение не выдано. Его можно изменить в настройках приложения.")
             return@registerForActivityResult
         }
-        when (action) {
-            "microphone" -> service?.setMicrophone(true)
-            "camera" -> service?.setCamera(true)
-            "headphones" -> service?.setSpeaker(false)
-        }
+        grantedPermissionAction = action
+        dispatchPendingMedia()
     }
     private val notificationPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (!granted) notice("Звонок продолжится. Уведомление можно разрешить в настройках приложения.")
     }
     private val screenConsent = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         val desired = screenRequest
-        screenRequest = null
         val data = result.data
-        if (result.resultCode != Activity.RESULT_OK || data == null || desired == null) return@registerForActivityResult
-        val current = service
-        if (current == null || currentState.phase != "connected") {
-            notice("Сначала подключитесь к звонку, затем повторно выберите экран.")
+        if (result.resultCode != Activity.RESULT_OK || data == null || desired == null) {
+            screenRequest = null
+            screenPermissionData = null
             return@registerForActivityResult
         }
-        current.startScreen(data, desired.audio, desired.fps, desired.bitrate, desired.codec)
+        // The system picker may have stopped this Activity. Its result is delivered
+        // before the asynchronous service binding, so keep the one-use consent
+        // until the existing call is bound again.
+        screenPermissionData = data
+        dispatchPendingMedia()
     }
 
     private val connection = object : ServiceConnection {
@@ -130,9 +133,13 @@ class CallActivity : ComponentActivity() {
         channelName = intent.getStringExtra(CallService.EXTRA_CHANNEL_NAME).orEmpty().take(100)
         if (!CHANNEL_ID.matches(channelId)) { finish(); return }
         pendingPermission = savedInstanceState?.getString("pendingPermission")
+        callRequested = savedInstanceState?.getBoolean("callRequested") ?: true
+        grantedPermissionAction = savedInstanceState?.getString("grantedPermissionAction")
         notificationRequested = savedInstanceState?.getBoolean("notificationRequested") == true
         if (savedInstanceState?.getBoolean("screenPending") == true) {
             screenRequest = ScreenRequest(savedInstanceState.getBoolean("screenAudio"), savedInstanceState.getInt("screenFps", 30), savedInstanceState.getInt("screenBitrate", 24_000_000), savedInstanceState.getString("screenCodec") ?: "h264")
+            @Suppress("DEPRECATION")
+            screenPermissionData = savedInstanceState.getParcelable("screenPermissionData")
         }
         buildUi()
     }
@@ -140,11 +147,9 @@ class CallActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
         if (!::root.isInitialized) return
-        val connect = Intent(this, CallService::class.java)
-            .putExtra(CallService.EXTRA_CHANNEL_ID, channelId)
-            .putExtra(CallService.EXTRA_CHANNEL_NAME, channelName)
+        visible = true
+        startRequestedCall()
         try {
-            startForegroundService(connect)
             bound = bindService(Intent(this, CallService::class.java), connection, Context.BIND_AUTO_CREATE)
             if (Build.VERSION.SDK_INT >= 33 && !notificationRequested && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
                 notificationRequested = true
@@ -163,12 +168,16 @@ class CallActivity : ComponentActivity() {
         if (CHANNEL_ID.matches(requested)) {
             channelId = requested
             channelName = intent.getStringExtra(CallService.EXTRA_CHANNEL_NAME).orEmpty().take(100)
+            callRequested = true
+            if (visible) startRequestedCall()
             render(CallService.activeState.value)
         }
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
         outState.putString("pendingPermission", pendingPermission)
+        outState.putBoolean("callRequested", callRequested)
+        outState.putString("grantedPermissionAction", grantedPermissionAction)
         outState.putBoolean("notificationRequested", notificationRequested)
         screenRequest?.let {
             outState.putBoolean("screenPending", true)
@@ -176,11 +185,13 @@ class CallActivity : ComponentActivity() {
             outState.putInt("screenFps", it.fps)
             outState.putInt("screenBitrate", it.bitrate)
             outState.putString("screenCodec", it.codec)
+            outState.putParcelable("screenPermissionData", screenPermissionData)
         }
         super.onSaveInstanceState(outState)
     }
 
     override fun onStop() {
+        visible = false
         collectJob?.cancel()
         collectJob = null
         disposeVideos()
@@ -268,9 +279,9 @@ class CallActivity : ComponentActivity() {
         val bottom = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         bottom.addView(button("К чатам") { finish() }, LinearLayout.LayoutParams(0, dp(52), 1f))
         retry = button("Подключиться") {
-            service?.connect(channelId, channelName)
             // A stopped-but-bound service must be started again for the next call.
-            startForegroundService(Intent(this, CallService::class.java).putExtra(CallService.EXTRA_CHANNEL_ID, channelId).putExtra(CallService.EXTRA_CHANNEL_NAME, channelName))
+            callRequested = true
+            startRequestedCall()
         }.apply { visibility = View.GONE }
         bottom.addView(retry, LinearLayout.LayoutParams(0, dp(52), 1f))
         bottom.addView(button("Завершить") { service?.leave(); finish() }.apply { setTextColor(Color.rgb(250, 178, 178)) }, LinearLayout.LayoutParams(0, dp(52), 1f))
@@ -314,6 +325,7 @@ class CallActivity : ComponentActivity() {
         if (!state.microphone) appAudio.isChecked = false
         appAudio.isEnabled = !state.screen && !state.busy && state.microphone
         retry.visibility = if (state.phase in setOf("ended", "error", "idle")) View.VISIBLE else View.GONE
+        dispatchPendingMedia()
         val currentRoom = service?.room
         if (currentRoom == null || state.phase !in setOf("connected", "reconnecting")) {
             disposeVideos()
@@ -353,7 +365,7 @@ class CallActivity : ComponentActivity() {
             screenTile?.dispose(); screenTile = null; screenTileIdentity = null
             screenContainer.removeAllViews(); screenContainer.visibility = View.GONE
         }
-        val choiceIds = sharing.map { it.id }
+        val choiceIds = sharing.map { "${it.id}:${it.username}" }
         if (choiceIds != screenChoiceIds) {
             screenChoices.removeAllViews()
             if (sharing.size > 1) sharing.forEach { person -> screenChoices.addView(button("Экран: ${person.username}") { service?.selectScreen(person.id) }) }
@@ -363,7 +375,7 @@ class CallActivity : ComponentActivity() {
     }
 
     private fun requestScreen() {
-        if (service == null || currentState.phase != "connected") return
+        if (service == null || currentState.phase != "connected" || screenRequest != null) return
         val desired = ScreenRequest(appAudio.isChecked, if (fps.selectedItemPosition == 1) 60 else 30, listOf(12_000_000, 24_000_000, 40_000_000)[bitrate.selectedItemPosition.coerceIn(0, 2)], listOf("h264", "vp9", "vp8")[codec.selectedItemPosition.coerceIn(0, 2)])
         screenRequest = desired
         val manager = getSystemService(MediaProjectionManager::class.java)
@@ -371,16 +383,65 @@ class CallActivity : ComponentActivity() {
         catch (_: Exception) { screenRequest = null; notice("Системный выбор экрана недоступен.") }
     }
 
+    private fun startRequestedCall() {
+        if (!callRequested) return
+        try {
+            startForegroundService(Intent(this, CallService::class.java)
+                .putExtra(CallService.EXTRA_CHANNEL_ID, channelId)
+                .putExtra(CallService.EXTRA_CHANNEL_NAME, channelName))
+            callRequested = false
+        } catch (_: Exception) {
+            notice("Не удалось запустить звонок. Повторно откройте канал.")
+        }
+        // Rebinding after the screen picker or unlocking the phone must not
+        // rejoin a call that was ended from its notification or by an admin.
+    }
+
     private fun permission(action: String, permission: String, granted: () -> Unit) {
         if (checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED) granted()
-        else { pendingPermission = action; mediaPermission.launch(permission) }
+        else if (pendingPermission == null) { pendingPermission = action; mediaPermission.launch(permission) }
+    }
+
+    private fun dispatchPendingMedia() {
+        val current = service ?: return
+        val state = CallService.activeState.value
+        if (state.channelId != channelId || state.phase != "connected") {
+            if (state.phase in setOf("ended", "error", "idle") || state.channelId != channelId) {
+                grantedPermissionAction = null
+                if (screenPermissionData != null) {
+                    screenPermissionData = null
+                    screenRequest = null
+                    notice("Звонок завершился. Подключитесь и повторно выберите экран.")
+                }
+            }
+            return
+        }
+        val action = grantedPermissionAction
+        grantedPermissionAction = null
+        when (action) {
+            "microphone" -> current.setMicrophone(true)
+            "camera" -> current.setCamera(true)
+            "headphones" -> current.setSpeaker(false)
+        }
+        val data = screenPermissionData ?: return
+        val desired = screenRequest ?: return
+        // Clear before dispatch: MediaProjection grants must never be reused.
+        screenPermissionData = null
+        screenRequest = null
+        current.startScreen(data, desired.audio, desired.fps, desired.bitrate, desired.codec)
     }
 
     private fun openFullscreen(room: Room, track: io.livekit.android.room.track.VideoTrack, username: String, mirror: Boolean) {
         dismissFullscreen()
         fullscreenTrack = track
-        fullscreen = VideoTile.showFullscreen(this, room, track, username, mirror)
-        fullscreen?.setOnDismissListener { fullscreen = null; fullscreenTrack = null }
+        fullscreen = VideoTile.showFullscreen(this, room, track, username, mirror) {
+            fullscreen = null
+            fullscreenTrack = null
+        }
+        if (fullscreen == null) {
+            fullscreenTrack = null
+            notice("Видео временно недоступно. Повторите после восстановления связи.")
+        }
     }
 
     private fun dismissFullscreen() { fullscreen?.dismiss(); fullscreen = null; fullscreenTrack = null }

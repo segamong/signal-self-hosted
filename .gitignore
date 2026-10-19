@@ -10,7 +10,10 @@ deploy/data/
 *.db-shm
 *.log
 **/.gradle/
+**/.kotlin/
 android/**/build/
+android/build/
+android/signing/
 **/local.properties
 *.apk
 *.aab

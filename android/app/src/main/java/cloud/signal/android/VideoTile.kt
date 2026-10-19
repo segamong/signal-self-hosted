@@ -207,6 +207,7 @@ class VideoTile(context: Context, private val room: Room) : FrameLayout(context)
             track: VideoTrack,
             username: String,
             mirror: Boolean = false,
+            onDismiss: (() -> Unit)? = null,
         ): Dialog? {
             if (activity.isFinishing || activity.isDestroyed) return null
             val dialog = Dialog(activity, android.R.style.Theme_Black_NoTitleBar_Fullscreen)
@@ -221,7 +222,10 @@ class VideoTile(context: Context, private val room: Room) : FrameLayout(context)
                 root.removeView(video)
                 runCatching { video.release() }
             }
-            dialog.setOnDismissListener { releaseRenderer() }
+            dialog.setOnDismissListener {
+                releaseRenderer()
+                onDismiss?.invoke()
+            }
             // A dialog's view detaches when its Activity is destroyed, too.
             root.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
                 override fun onViewAttachedToWindow(view: View) = Unit
