@@ -1,0 +1,332 @@
+.channel-invitation-form {
+  margin: 22px 0;
+  padding: 18px;
+  border: 1px solid #3b5142;
+  border-radius: 12px;
+  background: #1b2720;
+}
+
+.channel-invitation-heading {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  margin-bottom: 18px;
+}
+
+.channel-invitation-symbol,
+.invitation-inbox-channel-icon {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 38px;
+  height: 38px;
+  border: 1px solid #91bd7040;
+  border-radius: 11px;
+  background: #b8ef8710;
+  color: #b8ef87;
+}
+
+.channel-invitation-heading h3 {
+  margin: 0;
+  color: #e3ede5;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.channel-invitation-heading p {
+  margin: 4px 0 0;
+  color: #9fb4a6;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.channel-invitation-heading strong {
+  color: #c7dbc9;
+  font-weight: 500;
+}
+
+.channel-invitation-form .channel-invitation-label {
+  display: block;
+  margin: 0 0 8px;
+  color: #c5d4ca;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.channel-invitation-input-row {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+}
+
+.channel-invitation-input-wrap {
+  display: flex;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
+  border: 1px solid #45594b;
+  border-radius: 8px;
+  background: #111b15;
+  color: #b7cfbd;
+}
+
+.channel-invitation-input-wrap:focus-within {
+  border-color: #b8ef87;
+  outline: 2px solid #b8ef8733;
+  outline-offset: 1px;
+}
+
+.channel-invitation-input-wrap > span {
+  padding-left: 12px;
+  font-size: 14px;
+  user-select: none;
+}
+
+.channel-invitation-form .channel-invitation-input-wrap input {
+  flex: 1;
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+  padding: 11px 10px 11px 5px;
+  border: 0;
+  border-radius: 8px;
+  outline: 0;
+  background: transparent;
+  color: #edf5ef;
+  box-shadow: none;
+  font-size: 13px;
+}
+
+.channel-invitation-input-wrap input::placeholder {
+  color: #7e9385;
+}
+
+.channel-invitation-form .channel-invitation-submit {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  gap: 7px;
+  width: auto;
+  margin: 0;
+  padding: 10px 12px;
+  font-size: 12px;
+}
+
+.channel-invitation-form .channel-invitation-help {
+  margin: 10px 0 0;
+  color: #9bb0a2;
+  font-size: 11px;
+  line-height: 1.7;
+}
+
+.channel-invitation-form .channel-invitation-success {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 13px 0 0;
+  padding: 10px;
+  border: 1px solid #98ca783b;
+  border-radius: 8px;
+  background: #b8ef8710;
+  color: #c3ecac;
+  font-size: 12px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.channel-invitation-success svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.invitation-inbox {
+  min-width: 0;
+}
+
+.invitation-inbox .invitation-inbox-intro {
+  margin: 0 0 16px;
+  color: #a7baae;
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.invitation-inbox-list {
+  display: grid;
+  gap: 12px;
+  max-height: min(52dvh, 500px);
+  margin: 0;
+  padding: 2px 4px 4px 2px;
+  overflow: auto;
+  list-style: none;
+  scrollbar-width: thin;
+  scrollbar-color: #43574a transparent;
+}
+
+.invitation-inbox-card {
+  min-width: 0;
+  padding: 17px;
+  border: 1px solid #3b5142;
+  border-radius: 12px;
+  background: #1b2720;
+}
+
+.invitation-inbox-card-heading {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+}
+
+.invitation-inbox-channel-info {
+  min-width: 0;
+}
+
+.invitation-inbox-channel-info h3 {
+  margin: 0;
+  color: #e4efe7;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.invitation-inbox-channel-info p {
+  margin: 4px 0 0;
+  color: #a2b6a9;
+  font-size: 12px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.invitation-inbox-channel-info strong {
+  color: #c8dfcf;
+  font-weight: 500;
+}
+
+.invitation-inbox .invitation-inbox-description {
+  margin: 12px 0 0;
+  color: #b0c0b5;
+  font-size: 12px;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.invitation-inbox .invitation-inbox-expiry {
+  margin: 12px 0 0;
+  color: #93a99a;
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.invitation-inbox-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 9px;
+  margin-top: 15px;
+}
+
+.invitation-inbox-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-width: 115px;
+  margin: 0;
+  padding: 10px 13px;
+  font-size: 12px;
+}
+
+.channel-invitation-form button:disabled,
+.invitation-inbox-actions button:disabled {
+  opacity: .55;
+  cursor: wait;
+}
+
+.channel-invitation-form button:focus-visible,
+.invitation-inbox button:focus-visible {
+  outline: 2px solid #b8ef87;
+  outline-offset: 3px;
+}
+
+.invitation-inbox-state {
+  display: inline-block;
+  margin-top: 14px;
+  padding: 5px 9px;
+  border: 1px solid #43574a;
+  border-radius: 6px;
+  color: #b7cbbd;
+  font-size: 11px;
+}
+
+.invitation-inbox-empty {
+  display: flex;
+  align-items: center;
+  flex-direction: column;
+  padding: 24px 10px 18px;
+  text-align: center;
+}
+
+.invitation-inbox-empty-icon {
+  display: grid;
+  place-items: center;
+  width: 68px;
+  height: 68px;
+  margin-bottom: 18px;
+  border: 1px solid #48603f;
+  border-radius: 21px;
+  background: #b8ef8710;
+  color: #b8ef87;
+}
+
+.invitation-inbox-empty h3 {
+  margin: 0;
+  color: #dfebe2;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.invitation-inbox-empty p {
+  max-width: 340px;
+  margin: 11px 0 0;
+  color: #a2b5a8;
+  font-size: 12px;
+  line-height: 1.8;
+}
+
+.invitation-inbox-footer {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid #34463a;
+}
+
+.invitation-inbox-footer button {
+  padding: 9px 18px;
+  font-size: 12px;
+}
+
+@media (max-width: 500px) {
+  .channel-invitation-form {
+    padding: 15px;
+  }
+
+  .channel-invitation-input-row {
+    flex-direction: column;
+  }
+
+  .channel-invitation-form .channel-invitation-submit {
+    width: 100%;
+    min-height: 40px;
+  }
+
+  .invitation-inbox-card {
+    padding: 14px;
+  }
+
+  .invitation-inbox-actions button {
+    flex: 1;
+    min-width: 100px;
+  }
+}

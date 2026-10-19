@@ -1,0 +1,38 @@
+[Unit]
+Description=Signal LiveKit media server
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=signal-media
+Group=signal-media
+WorkingDirectory=/var/lib/signal-media
+ExecStart=/opt/signal/runtime/bin/livekit-server --config /etc/signal/livekit.yaml
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=30
+StateDirectory=signal-media
+StateDirectoryMode=0700
+UMask=0077
+CPUQuota=125%
+MemoryMax=1G
+TasksMax=256
+LimitNOFILE=65536
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+ReadWritePaths=/var/lib/signal-media
+
+[Install]
+WantedBy=multi-user.target

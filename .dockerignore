@@ -1,0 +1,11 @@
+node_modules
+dist
+.git
+.env
+deploy/.env
+deploy/generated
+deploy/backups
+deploy/data
+*.log
+tests
+README.ru.md

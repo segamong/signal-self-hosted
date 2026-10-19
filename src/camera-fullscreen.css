@@ -1,0 +1,208 @@
+.participant-tile.has-video {
+  cursor: zoom-in;
+}
+
+.participant-fullscreen-toggle {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 6;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid #c2d7ca70;
+  border-radius: 6px;
+  background: #0c1411eb;
+  color: #f1faf5;
+  cursor: pointer;
+  box-shadow: 0 1px 6px #0005;
+  transition: background-color 120ms ease, border-color 120ms ease;
+}
+
+.participant-fullscreen-toggle svg {
+  width: 17px;
+  height: 17px;
+  pointer-events: none;
+}
+
+.participant-fullscreen-toggle:hover {
+  background: #263b2eef;
+  border-color: #b8ef87;
+  color: #fff;
+}
+
+.participant-fullscreen-toggle:focus-visible,
+.participant-tile.has-video .participant-volume > summary:focus-visible {
+  outline: 2px solid #b8ef87;
+  outline-offset: 2px;
+}
+
+.participant-tile.has-video .participant-volume:not([open]) {
+  top: 8px;
+  right: 46px;
+  width: 32px;
+  height: 30px;
+  padding: 0;
+  background: #0c1411eb;
+  color: #f1faf5;
+  border-radius: 6px;
+  cursor: default;
+}
+
+.participant-tile.has-video .participant-volume > summary {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 30px;
+  box-sizing: border-box;
+  border: 1px solid #c2d7ca70;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.participant-tile.has-video .participant-volume > summary:hover {
+  background: #263b2eef;
+  border-color: #b8ef87;
+  color: #fff;
+}
+
+/* Keep the open details element over the entire tile. Only move its trigger. */
+.participant-tile.has-video .participant-volume[open] {
+  inset: 0;
+  cursor: default;
+}
+
+.participant-tile.has-video .participant-volume[open] > summary {
+  top: 8px;
+  right: 46px;
+  padding: 0;
+  background: #0c1411eb;
+  color: #f1faf5;
+}
+
+.camera-fullscreen-hint {
+  display: none;
+  pointer-events: none;
+}
+
+article.participant-tile.has-video:fullscreen,
+article.participant-tile.has-video.compact:fullscreen {
+  width: 100dvw;
+  height: 100dvh;
+  min-width: 0;
+  min-height: 0;
+  max-width: none;
+  max-height: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: #070b0c;
+  box-shadow: none;
+  cursor: zoom-out;
+  isolation: isolate;
+}
+
+article.participant-tile.has-video:fullscreen::backdrop {
+  background: #070b0c;
+}
+
+article.participant-tile.has-video:fullscreen .camera-video {
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  max-height: none;
+  object-fit: contain;
+  object-position: center;
+}
+
+article.participant-tile.has-video:fullscreen .participant-caption {
+  left: 24px;
+  right: 24px;
+  bottom: 24px;
+  gap: 12px;
+  padding: 12px 16px;
+  border: 1px solid #c2d7ca30;
+  border-radius: 10px;
+  background: #0c1411e6;
+  color: #f1faf5;
+  font-size: 16px;
+  line-height: 1.4;
+  text-shadow: 0 1px 3px #000;
+  cursor: default;
+}
+
+article.participant-tile.has-video:fullscreen .participant-caption small {
+  color: #c9d7ce;
+  font-size: 12px;
+}
+
+article.participant-tile.has-video:fullscreen .participant-caption-icons {
+  flex-shrink: 0;
+}
+
+article.participant-tile.has-video:fullscreen .participant-caption svg {
+  width: 19px;
+  height: 19px;
+}
+
+article.participant-tile.has-video:fullscreen .video-quality {
+  top: 14px;
+  left: 16px;
+  z-index: 4;
+  padding: 6px 9px;
+  border: 1px solid #c2d7ca30;
+  border-radius: 6px;
+  background: #0c1411e6;
+  color: #e1eee5;
+  font-size: 12px;
+  line-height: 1.4;
+  cursor: default;
+}
+
+article.participant-tile.has-video:fullscreen .camera-fullscreen-hint {
+  position: absolute;
+  left: 24px;
+  bottom: 86px;
+  z-index: 3;
+  display: block;
+  max-width: calc(100% - 48px);
+  margin: 0;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: #0c1411e6;
+  color: #d8e7dc;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+article.participant-tile.has-video:fullscreen .participant-volume[open] {
+  border-radius: 0;
+}
+
+article.participant-tile.has-video:fullscreen .participant-volume[open] .volume-popover {
+  top: 46px;
+  right: 46px;
+  bottom: auto;
+  left: auto;
+  width: min(280px, calc(100dvw - 62px));
+  box-sizing: border-box;
+  padding: 14px;
+  background: #16231cf5;
+  border-color: #c2d7ca60;
+  color: #f1faf5;
+}
+
+article.participant-tile.has-video:fullscreen .volume-popover label {
+  gap: 8px;
+  font-size: 12px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .participant-fullscreen-toggle {
+    transition: none;
+  }
+}

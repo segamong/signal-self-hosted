@@ -1,0 +1,41 @@
+[Unit]
+Description=Signal HTTPS endpoint
+After=network-online.target signal-app.service signal-media.service
+Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=signal-caddy
+Group=signal-caddy
+WorkingDirectory=/var/lib/signal-caddy
+Environment=XDG_DATA_HOME=/var/lib/signal-caddy
+Environment=XDG_CONFIG_HOME=/var/lib/signal-caddy
+ExecStart=/opt/signal/runtime/bin/caddy run --config /etc/signal/Caddyfile --adapter caddyfile
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=20
+StateDirectory=signal-caddy
+StateDirectoryMode=0700
+UMask=0077
+CPUQuota=15%
+MemoryMax=128M
+TasksMax=64
+LimitNOFILE=8192
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+ReadWritePaths=/var/lib/signal-caddy
+
+[Install]
+WantedBy=multi-user.target

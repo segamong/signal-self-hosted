@@ -1,0 +1,95 @@
+appId: cloud.signal.desktop
+productName: Сигнал
+executableName: Signal
+copyright: Copyright © 2026 Сигнал
+
+directories:
+  output: ../Windows
+  buildResources: build
+
+extraMetadata:
+  main: desktop/main.cjs
+  description: Голос, видео и трансляция экрана через ваш сервер
+
+asar: true
+compression: normal
+npmRebuild: false
+removePackageScripts: true
+electronLanguages:
+  - ru
+  - en-US
+
+# The renderer is prebuilt locally. No server source, database, credentials,
+# deployment files or development dependencies belong in the desktop package.
+# ws is the only Node dependency used by the desktop main process.
+files:
+  - dist/**/*
+  - desktop/**/*
+  - '!desktop/build-*.cjs'
+  - package.json
+  - '!**/*.map'
+  - '!**/.env*'
+  - '!**/*.{sqlite,sqlite3,db,pem,key}'
+  - '!node_modules/!(ws){,/**/*}'
+
+extraResources:
+  - from: build/icon.ico
+    to: icon.ico
+  - from: build/icon.png
+    to: icon.png
+
+protocols:
+  - name: Приглашение в канал Сигнала
+    schemes:
+      - signal
+
+electronFuses:
+  runAsNode: false
+  enableNodeOptionsEnvironmentVariable: false
+  enableNodeCliInspectArguments: false
+  enableEmbeddedAsarIntegrityValidation: true
+  onlyLoadAppFromAsar: true
+
+win:
+  icon: build/icon.ico
+  target:
+    - target: nsis
+      arch:
+        - x64
+    - target: portable
+      arch:
+        - x64
+  requestedExecutionLevel: asInvoker
+  # No signing certificate was supplied. Keep resource editing for icon and
+  # version metadata; turn off only signing, using the v26 signing option.
+  signAndEditExecutable: true
+  signExecutable: false
+
+nsis:
+  artifactName: Signal-Setup-${version}-${arch}.${ext}
+  oneClick: true
+  perMachine: false
+  allowElevation: false
+  packElevateHelper: false
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Сигнал
+  uninstallDisplayName: Сигнал
+  installerIcon: build/icon.ico
+  uninstallerIcon: build/icon.ico
+  installerLanguages:
+    - ru_RU
+    - en_US
+  deleteAppDataOnUninstall: false
+  runAfterFinish: true
+  differentialPackage: false
+  warningsAsErrors: true
+
+portable:
+  artifactName: Signal-Portable-${version}-${arch}.${ext}
+  requestExecutionLevel: user
+  unpackDirName: false
+  warningsAsErrors: true
+
+# Building must never publish to a repository or an update service implicitly.
+publish: null

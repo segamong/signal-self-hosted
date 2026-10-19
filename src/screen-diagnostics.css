@@ -1,0 +1,7 @@
+.screen-diagnostics{margin:8px 0;color:#9cadad;font-size:10px;line-height:1.6}
+.screen-diagnostics-values{display:flex;flex-wrap:wrap;gap:3px 12px;align-items:center;font-variant-numeric:tabular-nums}
+.screen-diagnostics-values strong{color:#c9d8cd;font-weight:600}
+.screen-diagnostics-values .screen-target{color:#7f9290}
+.share-loading{display:flex;flex-direction:column;align-items:center;gap:10px;color:#9cadad;font-size:12px;padding:24px;text-align:center}
+.share-stage:fullscreen .share-video-wrap{height:calc(100dvh - 150px)}
+@media(max-width:650px){.screen-diagnostics-values{gap:3px 9px}.screen-diagnostics{font-size:9px}}

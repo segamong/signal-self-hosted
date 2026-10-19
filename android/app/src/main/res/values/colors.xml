@@ -1,0 +1,5 @@
+<resources>
+    <color name="signal_background">#171821</color>
+    <color name="signal_accent">#B7EC8A</color>
+    <color name="signal_icon_background">#203326</color>
+</resources>

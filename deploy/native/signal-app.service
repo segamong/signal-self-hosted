@@ -1,0 +1,39 @@
+[Unit]
+Description=Signal chat application
+After=network-online.target signal-media.service
+Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=signal
+Group=signal
+WorkingDirectory=/opt/signal/app
+EnvironmentFile=/etc/signal/app.env
+ExecStart=/opt/signal/runtime/node-v24.19.0-linux-x64/bin/node /opt/signal/app/server/index.mjs
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=20
+KillSignal=SIGTERM
+StateDirectory=signal
+StateDirectoryMode=0700
+UMask=0077
+CPUQuota=30%
+MemoryMax=384M
+TasksMax=128
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/var/lib/signal
+
+[Install]
+WantedBy=multi-user.target
