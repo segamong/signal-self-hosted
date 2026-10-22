@@ -1,15 +1,20 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from './api';
 import { Room, RoomEvent, ConnectionState, DisconnectReason, Track, LocalVideoTrack, LocalAudioTrack, RemoteAudioTrack, VideoPresets, VideoQuality, BackupCodecPolicy, type LocalTrackPublication, type Participant, type RemoteParticipant, type TrackPublishOptions } from 'livekit-client';
-import { Headphones, HeadphoneOff, Mic, MicOff, Video, VideoOff, MonitorUp, MonitorOff, PhoneOff, Settings2, Volume2, VolumeX, Radio, ChevronDown, Maximize2, Minimize2, LoaderCircle, RefreshCw } from 'lucide-react';
+import { Headphones, HeadphoneOff, Mic, MicOff, Video, VideoOff, MonitorUp, MonitorOff, PhoneOff, Settings2, Volume2, VolumeX, Radio, ChevronDown, Maximize2, Minimize2, LoaderCircle, RefreshCw, LockKeyhole } from 'lucide-react';
 import './camera-fullscreen.css';
 import ScreenShareFrame from './ScreenShareFrame';
 import { toggleElementFullscreen } from './fullscreen';
 import { filterScreenAudio, screenAudioCaptureOptions } from './screenAudio';
 import { availableScreenCodecs, chooseScreenCodec, type ScreenCodecChoice } from './screenCodecs';
+import { loadAudioPreferences, saveAudioPreferences, microphoneCapture, VOICE_ENCODING, type AudioPreferences } from './audioPreferences';
+import { applyMicrophoneProcessing, processMicrophoneTrack } from './microphoneProcessor';
+import { createCallEncryption, prepareCallKey } from './callEncryption';
+import './media-settings.css';
+import { channelCapacity, type Channel } from './channelTypes';
 
 export interface CallStageProps {
-  channel: { id: string; name: string };
+  channel: Channel;
   user: { id: string; username: string };
   onLeave: () => void;
   onError: (message: string) => void;
@@ -50,6 +55,11 @@ function participantsSharing(room: Room): Participant[] {
   });
 }
 
+function hasUnencryptedMedia(room: Room) {
+  return [...room.remoteParticipants.values()].some(participant =>
+    [...participant.trackPublications.values()].some(publication => !publication.isEncrypted));
+}
+
 async function unpublishScreenTracks(room: Room) {
   const tracks = [...room.localParticipant.trackPublications.values()]
     .filter(publication => publication.source === Track.Source.ScreenShare || publication.source === Track.Source.ScreenShareAudio)
@@ -64,6 +74,28 @@ const CAMERA_ENCODING: TrackPublishOptions = {
   simulcast: true, videoSimulcastLayers: [VideoPresets.h180, VideoPresets.h360],
   degradationPreference: 'maintain-resolution',
 };
+
+async function enableMicrophone(current: Room, preferences: AudioPreferences) {
+  if (!current.localParticipant.getTrackPublication(Track.Source.Microphone)?.track) {
+    const tracks = await current.localParticipant.createTracks({ audio: microphoneCapture(preferences) });
+    try {
+      const track = tracks.find((candidate): candidate is LocalAudioTrack => candidate instanceof LocalAudioTrack);
+      if (!track) throw new Error('Не удалось создать дорожку микрофона.');
+      // Prepare the full processing chain before any captured audio is sent.
+      await processMicrophoneTrack(track, preferences);
+      if (current.state !== ConnectionState.Connected) throw new Error('Соединение с каналом завершилось.');
+      await current.localParticipant.publishTrack(track, { ...VOICE_ENCODING, source: Track.Source.Microphone });
+      return;
+    } catch (error) { tracks.forEach(track => track.stop()); throw error; }
+  }
+  await current.localParticipant.setMicrophoneEnabled(true, microphoneCapture(preferences), VOICE_ENCODING);
+  try { await applyMicrophoneProcessing(current, preferences); }
+  catch (error) {
+    // A selected processor failing must not leave an untreated microphone live.
+    await current.localParticipant.setMicrophoneEnabled(false).catch(() => {});
+    throw error;
+  }
+}
 
 function messageFor(error: unknown): string {
   if (error instanceof Error) {
@@ -233,6 +265,10 @@ export default function CallStage({ channel, user, onLeave, onError, initialPref
   deafenedRef.current = deafened;
   const [audioBlocked, setAudioBlocked] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [audioPreferences, setAudioPreferences] = useState(loadAudioPreferences);
+  const audioPreferencesRef = useRef(audioPreferences);
+  audioPreferencesRef.current = audioPreferences;
+  const [encryptionState, setEncryptionState] = useState<{ room: Room; fingerprint: string; epoch: string } | null>(null);
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
   const [devicesRequested, setDevicesRequested] = useState(false);
   const [deviceSelection, setDeviceSelection] = useState({ audioinput: 'default', videoinput: 'default', audiooutput: 'default' });
@@ -260,6 +296,11 @@ export default function CallStage({ channel, user, onLeave, onError, initialPref
   const focusedShareRef = useRef<string | null>(null);
   const [memberDirectory, setMemberDirectory] = useState<{ channelId: string; usernames: Map<string, string> }>({ channelId: '', usernames: new Map() });
   const markAudioBlocked = useCallback(() => setAudioBlocked(true), []);
+  useEffect(() => {
+    const openSettings = () => setSettingsOpen(true);
+    window.addEventListener('signal-open-media-settings', openSettings);
+    return () => window.removeEventListener('signal-open-media-settings', openSettings);
+  }, []);
   const releaseScreenCapture = useCallback((owner: Room, expected?: ScreenCaptureSession) => {
     const capture = expected || screenCaptureRef.current;
     if (!capture || capture.room !== owner) return;
@@ -351,14 +392,27 @@ export default function CallStage({ channel, user, onLeave, onError, initialPref
     let cancelled = false;
     let connectedOnce = false;
     const controller = new AbortController();
+    setEncryptionState(null);
+    let encryption: ReturnType<typeof createCallEncryption>;
+    try { encryption = createCallEncryption(); }
+    catch (error) {
+      const message = messageFor(error);
+      setConnectionError(message);
+      setState(ConnectionState.Disconnected);
+      callbacks.current.onError(message);
+      return;
+    }
     const nextRoom = new Room({
       adaptiveStream: false,
       dynacast: true,
       disconnectOnPageLeave: true,
       videoCaptureDefaults: { resolution: { width: 1920, height: 1080, frameRate: 30 } },
-      audioCaptureDefaults: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 },
-      publishDefaults: { ...CAMERA_ENCODING, audioPreset: { maxBitrate: 64_000 }, dtx: true, red: true, stopMicTrackOnMute: true },
+      audioCaptureDefaults: microphoneCapture(audioPreferencesRef.current),
+      publishDefaults: { ...CAMERA_ENCODING, ...VOICE_ENCODING, stopMicTrackOnMute: true },
+      encryption,
     });
+    let shutdownPromise: Promise<void> | undefined;
+    const shutdown = () => shutdownPromise ??= nextRoom.disconnect(true).finally(() => encryption.worker.terminate());
     roomRef.current = nextRoom;
     focusedShareRef.current = null;
     setFocusedShare(null);
@@ -369,9 +423,25 @@ export default function CallStage({ channel, user, onLeave, onError, initialPref
     setBusy(null);
     const sync = () => {
       if (cancelled) return;
+      if (nextRoom.state === ConnectionState.Connected && hasUnencryptedMedia(nextRoom)) {
+        encryptionFailure();
+        return;
+      }
       updateScreenSubscriptions(nextRoom);
       refresh(value => value + 1);
       setState(nextRoom.state);
+    };
+    const restoreAudioProcessing = () => {
+      if (cancelled || roomRef.current !== nextRoom || !nextRoom.localParticipant.isMicrophoneEnabled) return;
+      void applyMicrophoneProcessing(nextRoom, audioPreferencesRef.current).catch(async error => {
+        if (cancelled || roomRef.current !== nextRoom) return;
+        await nextRoom.localParticipant.setMicrophoneEnabled(false).catch(() => {});
+        callbacks.current.onError(`Обработка микрофона не запущена: ${messageFor(error)}`);
+        refresh(value => value + 1);
+      });
+    };
+    const microphonePublished = (publication: LocalTrackPublication) => {
+      if (publication.source === Track.Source.Microphone) restoreAudioProcessing();
     };
     const playback = () => { if (!cancelled) setAudioBlocked(!nextRoom.canPlaybackAudio); };
     const requestVideoQuality = () => {
@@ -382,6 +452,17 @@ export default function CallStage({ channel, user, onLeave, onError, initialPref
       }
     };
     const deviceError = (error: Error) => { if (!cancelled) callbacks.current.onError(messageFor(error)); };
+    const encryptionFailure = () => {
+      if (cancelled || roomRef.current !== nextRoom) return;
+      connectedOnce = false;
+      const message = 'Не удалось сохранить шифрование звонка. Соединение остановлено; подключитесь снова.';
+      releaseScreenCapture(nextRoom);
+      setEncryptionState(null);
+      setConnectionError(message);
+      setState(ConnectionState.Disconnected);
+      callbacks.current.onError(message);
+      void shutdown();
+    };
     const events = [RoomEvent.ParticipantConnected, RoomEvent.ParticipantDisconnected, RoomEvent.TrackSubscribed,
       RoomEvent.TrackUnsubscribed, RoomEvent.TrackPublished, RoomEvent.TrackUnpublished, RoomEvent.TrackMuted,
       RoomEvent.TrackUnmuted, RoomEvent.LocalTrackPublished, RoomEvent.LocalTrackUnpublished,
@@ -392,6 +473,10 @@ export default function CallStage({ channel, user, onLeave, onError, initialPref
     nextRoom.on(RoomEvent.TrackSubscribed, requestVideoQuality);
     nextRoom.on(RoomEvent.TrackPublished, requestVideoQuality);
     nextRoom.on(RoomEvent.MediaDevicesError, deviceError);
+    nextRoom.on(RoomEvent.EncryptionError, encryptionFailure);
+    nextRoom.on(RoomEvent.LocalTrackPublished, microphonePublished);
+    nextRoom.on(RoomEvent.Reconnected, restoreAudioProcessing);
+    encryption.worker.addEventListener('error', encryptionFailure);
     const localUnpublished = (publication: LocalTrackPublication) => {
       if (publication.source !== Track.Source.ScreenShare) return;
       // SDK reconnect/republish uses unpublishTrack(track, false). Keep the
@@ -405,27 +490,46 @@ export default function CallStage({ channel, user, onLeave, onError, initialPref
     nextRoom.on(RoomEvent.LocalTrackUnpublished, localUnpublished);
     const disconnected = (reason?: DisconnectReason) => {
       if (cancelled || roomRef.current !== nextRoom) return;
-      if (reason === DisconnectReason.PARTICIPANT_REMOVED || reason === DisconnectReason.ROOM_DELETED) {
+      if (reason === DisconnectReason.PARTICIPANT_REMOVED) {
         releaseScreenCapture(nextRoom);
         restoredRoomRef.current = null;
         callbacks.current.onServerRemoved?.();
         callbacks.current.onLeave();
         return;
       }
+      if (reason === DisconnectReason.ROOM_DELETED) {
+        connectedOnce = false;
+        releaseScreenCapture(nextRoom);
+        restoredRoomRef.current = null;
+        setRoom(null);
+        setEncryptionState(null);
+        setState(ConnectionState.Disconnected);
+        setConnectionError('Состав комнаты или ключ шифрования изменился. Подключитесь снова.');
+        void shutdown();
+        return;
+      }
       if (!connectedOnce) return;
       releaseScreenCapture(nextRoom);
       sync();
       setConnectionError('Соединение с голосовым каналом завершено. Можно подключиться снова.');
+      void shutdown();
     };
     nextRoom.on(RoomEvent.Disconnected, disconnected);
 
     void (async () => {
       try {
-        const data = await api<{url:string;token:string}>(`/channels/${encodeURIComponent(channel.id)}/join`, {});
+        const data = await api<{url:string;token:string;encryption:unknown}>(`/channels/${encodeURIComponent(channel.id)}/join`, { encryptionVersion: 1 });
         if (typeof data.url !== 'string' || typeof data.token !== 'string') throw new Error('Сервер не вернул параметры подключения');
-        if (cancelled) return;
+        if (cancelled || shutdownPromise) return;
+        const keyInfo = await prepareCallKey(encryption.keyProvider, data.encryption);
+        if (cancelled || shutdownPromise) return;
+        await nextRoom.setE2EEEnabled(true);
+        if (!nextRoom.isE2EEEnabled) throw new Error('Не удалось включить шифрование звонка. Подключение остановлено.');
+        if (cancelled || shutdownPromise) return;
+        setEncryptionState({ room: nextRoom, ...keyInfo });
         await nextRoom.connect(data.url, data.token, { autoSubscribe: true });
-        if (cancelled) { await nextRoom.disconnect(true); return; }
+        if (cancelled || shutdownPromise) { await shutdown(); return; }
+        if (hasUnencryptedMedia(nextRoom)) throw new Error('В канале есть участник без шифрования. Все участники должны обновить Сигнал и подключиться снова.');
         connectedOnce = true;
         setRoom(nextRoom);
         setBusy('restoring');
@@ -437,7 +541,7 @@ export default function CallStage({ channel, user, onLeave, onError, initialPref
         // A capture permission failure keeps the channel connected and that
         // device off. Screen capture is deliberately never restored here.
         if (desired.microphone) {
-          try { await nextRoom.localParticipant.setMicrophoneEnabled(true); }
+          try { await enableMicrophone(nextRoom, audioPreferencesRef.current); }
           catch (error) { if (!cancelled && roomRef.current === nextRoom) callbacks.current.onError(`Не удалось восстановить микрофон: ${messageFor(error)}`); }
         }
         if (cancelled || roomRef.current !== nextRoom || nextRoom.state !== ConnectionState.Connected) { await nextRoom.disconnect(true); return; }
@@ -457,7 +561,7 @@ export default function CallStage({ channel, user, onLeave, onError, initialPref
         setConnectionError(message);
         setState(ConnectionState.Disconnected);
         callbacks.current.onError(message);
-        await nextRoom.disconnect(true);
+        await shutdown();
       }
     })();
 
@@ -469,13 +573,17 @@ export default function CallStage({ channel, user, onLeave, onError, initialPref
       nextRoom.off(RoomEvent.TrackSubscribed, requestVideoQuality);
       nextRoom.off(RoomEvent.TrackPublished, requestVideoQuality);
       nextRoom.off(RoomEvent.MediaDevicesError, deviceError);
+      nextRoom.off(RoomEvent.EncryptionError, encryptionFailure);
+      nextRoom.off(RoomEvent.LocalTrackPublished, microphonePublished);
+      nextRoom.off(RoomEvent.Reconnected, restoreAudioProcessing);
+      encryption.worker.removeEventListener('error', encryptionFailure);
       nextRoom.off(RoomEvent.LocalTrackUnpublished, localUnpublished);
       nextRoom.off(RoomEvent.Disconnected, disconnected);
       if (restoredRoomRef.current === nextRoom) restoredRoomRef.current = null;
       if (roomRef.current === nextRoom) roomRef.current = null;
       releaseScreenCapture(nextRoom);
       // disconnect(true) stops all local capture tracks, including screen audio.
-      void nextRoom.disconnect(true);
+      void shutdown();
     };
   }, [channel.id, user.id, attempt, releaseScreenCapture, reportPreferences, updateScreenSubscriptions]);
 
@@ -525,15 +633,45 @@ export default function CallStage({ channel, user, onLeave, onError, initialPref
     if (kind === 'audiooutput' && !('setSinkId' in HTMLMediaElement.prototype)) throw new Error('Этот браузер не поддерживает выбор устройства вывода звука');
     const changed = await current.switchActiveDevice(kind, deviceId);
     if (!changed) throw new Error('Не удалось переключить устройство');
+    if (kind === 'audioinput' && current.localParticipant.isMicrophoneEnabled) await applyMicrophoneProcessing(current, audioPreferencesRef.current);
     if (roomRef.current === current) setDeviceSelection(previous => ({ ...previous, [kind]: deviceId }));
   });
 
   const toggleMicrophone = () => act('microphone', async current => {
     const enabled = !current.localParticipant.isMicrophoneEnabled;
-    await current.localParticipant.setMicrophoneEnabled(enabled);
+    if (enabled) await enableMicrophone(current, audioPreferencesRef.current);
+    else await current.localParticipant.setMicrophoneEnabled(false);
     if (roomRef.current !== current) { await current.disconnect(true); return; }
     reportPreferences(current, { microphone: enabled });
     if (devicesRequested) await listDevices();
+  });
+
+  const changeAudio = (patch: Partial<AudioPreferences>) => act('audio-settings', async current => {
+    const previous = audioPreferencesRef.current;
+    const next = { ...previous, ...patch };
+    const captureChanged = next.echoCancellation !== previous.echoCancellation || next.autoGainControl !== previous.autoGainControl
+      || next.noiseSuppression !== previous.noiseSuppression || next.noiseEngine !== previous.noiseEngine;
+    const track = current.localParticipant.getTrackPublication(Track.Source.Microphone)?.track;
+    try {
+      if (current.localParticipant.isMicrophoneEnabled && track instanceof LocalAudioTrack) {
+        if (captureChanged) await track.restartTrack({ ...microphoneCapture(next), deviceId: current.getActiveDevice('audioinput') || undefined });
+        await applyMicrophoneProcessing(current, next);
+      }
+    } catch (error) {
+      // Restore the previous chain. If that also fails, leave the mic muted.
+      try {
+        if (track instanceof LocalAudioTrack && current.localParticipant.isMicrophoneEnabled) {
+          await track.restartTrack({ ...microphoneCapture(previous), deviceId: current.getActiveDevice('audioinput') || undefined });
+          await applyMicrophoneProcessing(current, previous);
+        }
+      } catch { await current.localParticipant.setMicrophoneEnabled(false).catch(() => {}); }
+      throw error;
+    }
+    if (roomRef.current !== current) return;
+    current.options.audioCaptureDefaults = microphoneCapture(next);
+    audioPreferencesRef.current = next;
+    setAudioPreferences(next);
+    saveAudioPreferences(next);
   });
 
   const toggleMicrophoneRef = useRef(toggleMicrophone);
@@ -657,6 +795,7 @@ export default function CallStage({ channel, user, onLeave, onError, initialPref
   };
 
   const participants: Participant[] = room ? [room.localParticipant, ...room.remoteParticipants.values()] : [];
+  const participantLimit = channelCapacity(channel);
   const shares = room ? participantsSharing(room) : [];
   const shareParticipant = shares.find(participant => participant.identity === focusedShare) || shares[0];
   const shareTrack = shareParticipant?.getTrackPublication(Track.Source.ScreenShare)?.videoTrack;
@@ -666,10 +805,12 @@ export default function CallStage({ channel, user, onLeave, onError, initialPref
   const sharing = room?.localParticipant.isScreenShareEnabled ?? false;
   const remote = participants.filter((participant): participant is RemoteParticipant => !participant.isLocal);
   const statusLabel = connected ? 'Вы в голосовом канале' : state === ConnectionState.Reconnecting || state === ConnectionState.SignalReconnecting ? 'Восстанавливаем связь…' : connectionError ? 'Нет соединения' : 'Подключаемся…';
+  const supportedAudio = navigator.mediaDevices?.getSupportedConstraints() || {};
+  const sourceAudioSettings = room?.localParticipant.getTrackPublication(Track.Source.Microphone)?.audioTrack?.getSourceTrackSettings();
 
   return <section className={`call-stage${shareParticipant ? ' has-share' : ''}`} aria-label={`Голосовой канал ${channel.name}`}>
     <div className="call-heading"><div><span className={`call-connection${connected ? ' connected' : ''}`}><Radio size={14} />{statusLabel}</span><h2>{channel.name}</h2></div>
-      <span className="call-count">{participants.length} / 10 участников</span></div>
+      <div className="call-heading-meta">{connected && encryptionState?.room === room && <details className="call-encryption"><summary title="Проверить шифрование звонка"><LockKeyhole size={14} /> Шифрование включено</summary><div className="encryption-popover"><strong>Код безопасности звонка</strong><code>{encryptionState.fingerprint}</code><p>Сверьте код с собеседником. Звук, видео и экран шифруются на устройстве. Ключ выдаёт сервер Сигнала; медиасервер LiveKit его не получает. Текстовые чаты этим ключом не шифруются.</p><small>Версия ключа: {encryptionState.epoch}</small></div></details>}<span className="call-count">{participants.length} / {participantLimit} {participantLimit === 2 ? 'участника' : 'участников'}</span></div></div>
 
     {!connected && <div className="call-status" role="status">
       {connectionError ? <><Radio size={30} /><h3>Не удалось подключиться</h3><p>{connectionError}</p><button className="button primary" onClick={() => setAttempt(value => value + 1)}><RefreshCw size={16} />Повторить подключение</button></> : <><LoaderCircle className="spin" size={30} /><h3>{statusLabel}</h3><p>Микрофон и камера включаются кнопками ниже.</p></>}
@@ -678,17 +819,38 @@ export default function CallStage({ channel, user, onLeave, onError, initialPref
     {room && <>
       {audioBlocked && !deafened && <div className="audio-unlock" role="status"><Volume2 size={18} /><span>Браузер ожидает разрешения на воспроизведение звука.</span><button onClick={() => act('audio', async current => { await current.startAudio(); if (roomRef.current === current) setAudioBlocked(!current.canPlaybackAudio); })}>Включить звук</button></div>}
       <div className="remote-audio" aria-hidden="true">{remote.flatMap(participant => [...participant.audioTrackPublications.values()].map(publication => publication.audioTrack instanceof RemoteAudioTrack && (publication.source !== Track.Source.ScreenShareAudio || participant.identity === shareParticipant?.identity) ? <RemoteAudio key={publication.trackSid} track={publication.audioTrack} deafened={deafened} volume={volumes[participant.identity] ?? 100} onBlocked={markAudioBlocked} /> : null))}</div>
+      <div className={`call-media-layout${shareParticipant ? ' has-screen-share' : ''}`}>
       {shareParticipant && <ScreenShareFrame username={usernameFor(shareParticipant)} onError={message => callbacks.current.onError(message)}>
         <div className="share-video-wrap">{shareTrack ? <MediaVideo track={shareTrack} local={shareParticipant.isLocal} screen /> : <div className="share-loading"><LoaderCircle className="spin" size={24} /><span>Подключаем выбранную демонстрацию…</span></div>}</div>
         {shares.length > 1 && <div className="share-switcher">{shares.map(participant => <button key={participant.identity} className={participant === shareParticipant ? 'active' : ''} aria-pressed={participant === shareParticipant} onClick={() => focusShare(participant.identity)}>{usernameFor(participant)}</button>)}</div>}
       </ScreenShareFrame>}
       <div className={`participant-grid${shareParticipant ? ' thumbnails' : ''}`}>{participants.map(participant => <ParticipantTile key={participant.identity} participant={participant} username={usernameFor(participant)} local={participant.isLocal} compact={!!shareParticipant} volume={volumes[participant.identity] ?? 100} onVolume={value => setVolumes(previous => ({ ...previous, [participant.identity]: value }))} onError={message => callbacks.current.onError(message)} />)}</div>
-      {participants.length === 1 && !shareParticipant && <div className="call-alone"><span>Здесь пока тихо</span><p>Вы уже в канале. Пригласите друзей и начните разговор.</p></div>}
+      </div>
+      {participants.length === 1 && !shareParticipant && <div className="call-alone"><span>Здесь пока тихо</span><p>{channel.kind === 'direct' ? 'Вы в личном разговоре. Дождитесь собеседника.' : 'Вы уже в канале. Пригласите друзей и начните разговор.'}</p></div>}
     </>}
 
     {settingsOpen && <div className="call-settings"><div className="settings-heading"><h3>Звук и видео</h3><button className="text-button" onClick={() => void listDevices()}><RefreshCw size={14} />Обновить устройства</button></div>
       <div className="device-grid">{(['audioinput', 'audiooutput', 'videoinput'] as const).map(kind => <label key={kind}>{kind === 'audioinput' ? 'Микрофон' : kind === 'audiooutput' ? 'Наушники / динамики' : 'Камера'}<select value={deviceSelection[kind]} disabled={!connected || !!busy || (kind === 'audiooutput' && !('setSinkId' in HTMLMediaElement.prototype))} onChange={event => changeDevice(kind, event.target.value)}><option value="default">По умолчанию</option>{devices.filter(device => device.kind === kind && device.deviceId !== 'default' && device.deviceId !== '').map((device, index) => <option key={device.deviceId} value={device.deviceId}>{device.label || `${kind === 'videoinput' ? 'Камера' : 'Устройство'} ${index + 1}`}</option>)}</select></label>)}</div>
       <p className="settings-hint">Названия устройств появятся после разрешения браузера. Выбор динамиков доступен в поддерживаемых браузерах.</p>
+      <section className="voice-settings" aria-label="Обработка голоса">
+        <h3>Голос и обработка</h3>
+        <p className="settings-hint">Opus высокого качества · до 96 кбит/с · приоритет звука · защита от потерь RED. Автоматическая пауза передачи отключена, чтобы сохранять тихие звуки.</p>
+        <div className="voice-preset-buttons"><button type="button" disabled={!connected || !!busy} onClick={() => changeAudio({ noiseEngine: 'browser', noiseSuppression: false, echoCancellation: true, autoGainControl: false, gateEnabled: true, gateThreshold: -60 })}>Естественный голос</button><button type="button" disabled={!connected || !!busy || !supportedAudio.noiseSuppression} onClick={() => changeAudio({ noiseEngine: 'browser', noiseSuppression: true, echoCancellation: true, autoGainControl: false, gateEnabled: true, gateThreshold: -50 })}>Шумное место</button></div>
+        <div className="voice-settings-grid">
+          <label>Обработка шума<select value={audioPreferences.noiseEngine} disabled={!connected || !!busy} onChange={event => changeAudio({ noiseEngine: event.target.value as AudioPreferences['noiseEngine'] })}><option value="browser">Средствами браузера</option><option value="rnnoise" disabled={!('AudioWorkletNode' in window)}>RNNoise · на этом устройстве</option></select></label>
+          {audioPreferences.noiseEngine === 'rnnoise' && <label>Профиль RNNoise<select value={audioPreferences.rnnoisePreset} disabled={!connected || !!busy} onChange={event => changeAudio({ rnnoisePreset: event.target.value as AudioPreferences['rnnoisePreset'] })}><option value="natural">Естественный</option><option value="balanced">Сбалансированный</option><option value="strong">Сильное подавление</option></select></label>}
+          <label>Громкость микрофона <strong>{audioPreferences.microphoneGain}%</strong><input aria-label="Громкость микрофона" type="range" min="0" max="200" step="5" value={audioPreferences.microphoneGain} disabled={!connected || !!busy} onChange={event => changeAudio({ microphoneGain: Number(event.target.value) })} /></label>
+          <label>Порог фонового шума <strong>{audioPreferences.gateThreshold} дБ</strong><input aria-label="Порог фонового шума" type="range" min="-70" max="-20" step="1" value={audioPreferences.gateThreshold} disabled={!connected || !!busy || !audioPreferences.gateEnabled} onChange={event => changeAudio({ gateThreshold: Number(event.target.value) })} /></label>
+        </div>
+        <div className="voice-switches">
+          <label><input type="checkbox" checked={audioPreferences.echoCancellation} disabled={!connected || !!busy || !supportedAudio.echoCancellation} onChange={event => changeAudio({ echoCancellation: event.target.checked })} />Подавлять эхо</label>
+          <label><input type="checkbox" checked={audioPreferences.autoGainControl} disabled={!connected || !!busy || !supportedAudio.autoGainControl} onChange={event => changeAudio({ autoGainControl: event.target.checked })} />Автоматическая громкость</label>
+          <label><input type="checkbox" checked={audioPreferences.noiseSuppression && audioPreferences.noiseEngine === 'browser'} disabled={!connected || !!busy || audioPreferences.noiseEngine !== 'browser' || !supportedAudio.noiseSuppression} onChange={event => changeAudio({ noiseSuppression: event.target.checked })} />Шумоподавление браузера</label>
+          <label><input type="checkbox" checked={audioPreferences.gateEnabled} disabled={!connected || !!busy || (!('AudioWorkletNode' in window) && !audioPreferences.gateEnabled)} onChange={event => changeAudio({ gateEnabled: event.target.checked })} />Приглушать фон между словами</label>
+        </div>
+        <p className="settings-hint">RNNoise работает локально. При его выборе шумоподавление браузера отключается, а подавление эха остаётся доступным. Более высокий порог сильнее убирает фон, но может обрезать тихую речь.</p>
+        {microphoneOn && <p className="voice-processing-state">Устройство сообщает: эхо — {sourceAudioSettings?.echoCancellation === undefined ? 'неизвестно' : sourceAudioSettings.echoCancellation ? 'включено' : 'выключено'}, шумоподавление браузера — {sourceAudioSettings?.noiseSuppression === undefined ? 'неизвестно' : sourceAudioSettings.noiseSuppression ? 'включено' : 'выключено'}, автоматическая громкость — {sourceAudioSettings?.autoGainControl === undefined ? 'неизвестно' : sourceAudioSettings.autoGainControl ? 'включена' : 'выключена'}.</p>}
+      </section>
       <label>Качество входящего видео<select value={cameraQuality} onChange={event => setCameraQuality(event.target.value as 'high' | 'medium')}><option value="high">Высокое · до 1080p</option><option value="medium">Экономия · до 360p</option></select></label>
       <p className="settings-hint">Высокое качество требует достаточной скорости сети. Фактическое разрешение видно на видео; при перегрузке сети оно может снижаться.</p>
       <h3>Трансляция экрана</h3>
@@ -712,6 +874,6 @@ export default function CallStage({ channel, user, onLeave, onError, initialPref
       <button className={`call-control${settingsOpen ? ' active' : ''}`} onClick={() => { setSettingsOpen(value => !value); if (!settingsOpen) void listDevices(); }} aria-label="Настройки звука и видео" aria-expanded={settingsOpen}><Settings2 size={21} /><span>Настройки <ChevronDown size={12} /></span></button>
       <span className="toolbar-divider" />
       <button className="call-control leave-call" onClick={leave} aria-label="Выйти из голосового канала"><PhoneOff size={21} /><span>Выйти</span></button>
-    </div><span className="toolbar-note"><span className="status-dot" />{connected ? 'WebRTC · защищённое соединение' : 'Ожидание подключения'}</span></div>
+    </div><span className="toolbar-note"><span className="status-dot" />{connected ? 'WebRTC · шифрование медиа включено' : 'Ожидание подключения'}</span></div>
   </section>;
 }

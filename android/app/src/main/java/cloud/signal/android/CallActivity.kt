@@ -10,6 +10,7 @@ import android.content.Intent
 import android.content.ServiceConnection
 import android.content.pm.PackageManager
 import android.content.res.ColorStateList
+import android.content.res.Configuration
 import android.graphics.Color
 import android.media.projection.MediaProjectionManager
 import android.os.Build
@@ -69,6 +70,13 @@ class CallActivity : ComponentActivity() {
     private lateinit var title: TextView
     private lateinit var status: TextView
     private lateinit var error: TextView
+    private lateinit var callContent: ScrollView
+    private lateinit var callControls: GridLayout
+    private lateinit var controlsContent: ScrollView
+    private lateinit var emptyContent: ScrollView
+    private lateinit var emptyState: LinearLayout
+    private lateinit var emptyTitle: TextView
+    private lateinit var emptyDescription: TextView
     private lateinit var participantGrid: GridLayout
     private lateinit var screenContainer: LinearLayout
     private lateinit var screenChoices: LinearLayout
@@ -79,11 +87,18 @@ class CallActivity : ComponentActivity() {
     private lateinit var deafen: Button
     private lateinit var speaker: Button
     private lateinit var flip: Button
+    private lateinit var quality: Button
     private lateinit var retry: Button
+    private lateinit var endCall: Button
     private lateinit var appAudio: CheckBox
     private lateinit var fps: Spinner
     private lateinit var bitrate: Spinner
     private lateinit var codec: Spinner
+    private val contentWidthDp: Int get() = if (::root.isInitialized && root.width > 0) {
+        ((root.width - root.paddingLeft - root.paddingRight) / resources.displayMetrics.density).toInt()
+    } else (resources.configuration.screenWidthDp - 24).coerceAtLeast(1)
+    private val controlColumns: Int get() = if (contentWidthDp < 336 || resources.configuration.fontScale >= 1.2f) 2 else 3
+    private val participantColumns: Int get() = if (contentWidthDp < 326 || resources.configuration.fontScale >= 1.35f) 1 else 2
 
     private data class ScreenRequest(val audio: Boolean, val fps: Int, val bitrate: Int, val codec: String)
 
@@ -123,8 +138,7 @@ class CallActivity : ComponentActivity() {
         }
         override fun onServiceDisconnected(name: ComponentName?) {
             service = null
-            disposeVideos()
-            status.text = "Звонок завершён"
+            render(currentState.copy(phase = "error", error = "Связь со звонком прервана. Можно подключиться снова или вернуться к чатам."))
         }
     }
 
@@ -157,8 +171,7 @@ class CallActivity : ComponentActivity() {
                 notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
             }
         } catch (_: Exception) {
-            error.text = "Не удалось запустить звонок. Откройте приложение и повторите."
-            error.visibility = View.VISIBLE
+            render(currentState.copy(phase = "error", error = "Не удалось запустить звонок. Можно повторить подключение или вернуться к чатам."))
         }
     }
 
@@ -207,6 +220,11 @@ class CallActivity : ComponentActivity() {
         super.onDestroy()
     }
 
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        updateResponsiveLayout()
+    }
+
     private fun buildUi() {
         root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -232,16 +250,16 @@ class CallActivity : ComponentActivity() {
             setPadding(0, dp(8), 0, dp(8))
             setOnClickListener { service?.clearError() }
         }
-        root.addView(error)
-        val scroll = ScrollView(this).apply { isFillViewport = true }
+        callContent = ScrollView(this).apply { isFillViewport = true; visibility = View.GONE }
         val body = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(0, dp(12), 0, dp(12)) }
+        body.addView(error)
         screenContainer = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; visibility = View.GONE }
         screenChoices = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         body.addView(screenContainer)
         body.addView(screenChoices)
-        participantGrid = GridLayout(this).apply { columnCount = 2 }
+        participantGrid = GridLayout(this).apply { columnCount = participantColumns }
         body.addView(participantGrid, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-        val quality = button("Качество показа экрана") { options.visibility = if (options.visibility == View.VISIBLE) View.GONE else View.VISIBLE }
+        quality = button("Качество показа экрана") { options.visibility = if (options.visibility == View.VISIBLE) View.GONE else View.VISIBLE }
         body.addView(quality)
         options = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; visibility = View.GONE; setPadding(0, dp(8), 0, dp(8)) }
         options.addView(text("Исходное разрешение. Частота и битрейт — цели: фактические значения зависят от телефона, сети и сервера.", 12f, MUTED))
@@ -265,10 +283,10 @@ class CallActivity : ComponentActivity() {
             "На этой версии Android можно передавать экран и микрофон. Захват звука других приложений появился в Android 10. Для смены качества остановите показ."
         }, 12f, MUTED))
         body.addView(options)
-        scroll.addView(body)
-        root.addView(scroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        callContent.addView(body)
+        root.addView(callContent, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
 
-        val controls = GridLayout(this).apply { columnCount = 3 }
+        callControls = GridLayout(this).apply { columnCount = controlColumns; setPadding(0, dp(8), 0, 0) }
         microphone = button("Микрофон выкл.") {
             if (currentState.microphone) service?.setMicrophone(false) else permission("microphone", Manifest.permission.RECORD_AUDIO) { service?.setMicrophone(true) }
         }
@@ -287,18 +305,52 @@ class CallActivity : ComponentActivity() {
         }
         deafen = button("Звук включён") { service?.setDeafened(!currentState.deafened) }
         flip = button("Сменить камеру") { service?.flipCamera() }
-        listOf(microphone, camera, screen, speaker, deafen, flip).forEachIndexed { index, view -> addControl(controls, view, index) }
-        root.addView(controls)
-        val bottom = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        bottom.addView(button("К чатам") { finish() }, LinearLayout.LayoutParams(0, dp(52), 1f))
-        retry = button("Подключиться") {
+        listOf(microphone, camera, screen, speaker, deafen, flip).forEachIndexed { index, view -> addControl(callControls, view, index) }
+        emptyState = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            setPadding(dp(20), dp(24), dp(20), dp(24))
+        }
+        emptyTitle = text("Подключаемся к каналу", 22f, TEXT).apply { gravity = Gravity.CENTER }
+        emptyDescription = text("Звук и видео появятся после подключения.", 14f, MUTED).apply {
+            gravity = Gravity.CENTER
+            setPadding(0, dp(12), 0, dp(20))
+        }
+        emptyState.addView(emptyTitle)
+        emptyState.addView(emptyDescription)
+        retry = button("Подключиться снова") {
             // A stopped-but-bound service must be started again for the next call.
             callRequested = true
             startRequestedCall()
-        }.apply { visibility = View.GONE }
-        bottom.addView(retry, LinearLayout.LayoutParams(0, dp(52), 1f))
-        bottom.addView(button("Завершить") { service?.leave(); finish() }.apply { setTextColor(Color.rgb(250, 178, 178)) }, LinearLayout.LayoutParams(0, dp(52), 1f))
+        }.apply { visibility = View.GONE; setTextColor(BACKGROUND); backgroundTintList = ColorStateList.valueOf(ACCENT) }
+        emptyState.addView(retry, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        emptyContent = ScrollView(this).apply { isFillViewport = true; addView(emptyState) }
+        root.addView(emptyContent, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        // Keep mute and camera controls separate from the participant list.
+        // A bounded viewport lets oversized controls scroll in a short window
+        // while ordinary portrait controls retain their natural height.
+        controlsContent = object : ScrollView(this) {
+            override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+                if (View.MeasureSpec.getMode(heightMeasureSpec) == View.MeasureSpec.UNSPECIFIED) {
+                    super.onMeasure(widthMeasureSpec, heightMeasureSpec)
+                    return
+                }
+                val availableHeight = View.MeasureSpec.getSize(heightMeasureSpec)
+                val cap = maxOf(dp(96), (availableHeight * 0.3f).toInt()).coerceAtMost(availableHeight)
+                super.onMeasure(widthMeasureSpec, View.MeasureSpec.makeMeasureSpec(cap, View.MeasureSpec.AT_MOST))
+            }
+        }.apply {
+            visibility = View.GONE
+            isFillViewport = false
+            addView(callControls)
+        }
+        root.addView(controlsContent, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        val bottom = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        bottom.addView(button("К чатам") { finish() }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        endCall = button("Завершить") { service?.leave(); finish() }.apply { setTextColor(Color.rgb(250, 178, 178)); visibility = View.GONE }
+        bottom.addView(endCall, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         root.addView(bottom)
+        root.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> updateResponsiveLayout() }
         setContentView(root)
         root.requestApplyInsets()
     }
@@ -322,10 +374,38 @@ class CallActivity : ComponentActivity() {
             "connected" -> "В канале · ${state.participants.size} / 10"
             "reconnecting" -> "Восстанавливаем связь…"
             "connecting" -> "Подключаемся…"
+            "error" -> "Нет соединения"
+            "idle" -> "Не подключено"
             else -> "Звонок завершён"
         }
+        val active = state.phase in setOf("connecting", "connected", "reconnecting")
+        val currentRoom = service?.room
+        val showMedia = currentRoom != null && state.phase in setOf("connected", "reconnecting")
+        callContent.visibility = if (showMedia) View.VISIBLE else View.GONE
+        controlsContent.visibility = if (showMedia) View.VISIBLE else View.GONE
+        emptyContent.visibility = if (showMedia) View.GONE else View.VISIBLE
+        emptyTitle.text = when (state.phase) {
+            "connecting" -> "Подключаемся к каналу"
+            "reconnecting" -> "Восстанавливаем связь"
+            "connected" -> "Подготавливаем звонок"
+            "error" -> "Не удалось продолжить звонок"
+            "idle" -> "Вы ещё не в звонке"
+            else -> "Звонок завершён"
+        }
+        emptyDescription.text = state.error ?: when (state.phase) {
+            "connecting", "connected" -> "Звук и видео появятся после подключения."
+            "reconnecting" -> "Подождите немного. Приложение восстанавливает соединение."
+            "idle" -> "Подключитесь, чтобы общаться голосом, включить камеру или показать экран."
+            else -> "Микрофон, камера и показ экрана выключены. Можно подключиться снова или вернуться к чатам."
+        }
+        retry.visibility = if (active) View.GONE else View.VISIBLE
+        retry.text = if (state.phase == "idle") "Подключиться" else "Подключиться снова"
+        endCall.visibility = if (active) View.VISIBLE else View.GONE
+        quality.visibility = if (showMedia) View.VISIBLE else View.GONE
+        quality.isEnabled = state.phase == "connected" && !state.busy
+        if (!active) options.visibility = View.GONE
         error.text = state.error.orEmpty()
-        error.visibility = if (state.error == null) View.GONE else View.VISIBLE
+        error.visibility = if (state.error == null || !showMedia) View.GONE else View.VISIBLE
         val enabled = state.phase == "connected" && !state.busy && service != null
         listOf(microphone, camera, screen, speaker, deafen).forEach { it.isEnabled = enabled }
         flip.isEnabled = enabled && state.camera
@@ -337,9 +417,7 @@ class CallActivity : ComponentActivity() {
         listOf(fps, bitrate, codec, appAudio).forEach { it.isEnabled = !state.screen && !state.busy }
         if (!state.microphone || Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) appAudio.isChecked = false
         appAudio.isEnabled = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && !state.screen && !state.busy && state.microphone
-        retry.visibility = if (state.phase in setOf("ended", "error", "idle")) View.VISIBLE else View.GONE
         dispatchPendingMedia()
-        val currentRoom = service?.room
         if (currentRoom == null || state.phase !in setOf("connected", "reconnecting")) {
             disposeVideos()
             return
@@ -354,9 +432,10 @@ class CallActivity : ComponentActivity() {
         }
         if (participantOrder != ids) {
             participantGrid.removeAllViews()
+            val columns = participantGrid.columnCount
             ids.forEachIndexed { index, id ->
-                participantGrid.addView(tiles.getValue(id), GridLayout.LayoutParams(GridLayout.spec(index / 2), GridLayout.spec(index % 2, 1f)).apply {
-                    width = 0; height = dp(155); setMargins(dp(3), dp(3), dp(3), dp(3))
+                participantGrid.addView(tiles.getValue(id), GridLayout.LayoutParams(GridLayout.spec(index / columns), GridLayout.spec(index % columns, 1f)).apply {
+                    width = 0; height = VideoTile.preferredHeight(this@CallActivity); setMargins(dp(3), dp(3), dp(3), dp(3))
                 })
             }
             participantOrder = ids
@@ -369,7 +448,7 @@ class CallActivity : ComponentActivity() {
                 screenContainer.removeAllViews()
                 screenTile = VideoTile(this, currentRoom)
                 screenTileIdentity = selected.id
-                screenContainer.addView(screenTile, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(255)))
+                screenContainer.addView(screenTile, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, screenTileHeight()))
             }
             screenTile?.bind(selected.screenTrack, "${selected.username} · экран", screen = true)
             screenTile?.onFullscreen = { selected.screenTrack?.let { openFullscreen(currentRoom, it, selected.username, false) } }
@@ -408,6 +487,7 @@ class CallActivity : ComponentActivity() {
             else startService(request)
             callRequested = false
         } catch (_: Exception) {
+            render(currentState.copy(phase = "error", error = "Не удалось запустить звонок. Повторите подключение или вернитесь к чатам."))
             notice("Не удалось запустить звонок. Повторно откройте канал.")
         }
         // Rebinding after the screen picker or unlocking the phone must not
@@ -478,7 +558,7 @@ class CallActivity : ComponentActivity() {
 
     private fun text(value: String, size: Float, color: Int) = TextView(this).apply { text = value; textSize = size; setTextColor(color) }
     private fun button(value: String, action: () -> Unit) = Button(this).apply {
-        text = value; textSize = 12f; isAllCaps = false; minHeight = dp(48)
+        text = value; textSize = 13f; isAllCaps = false; minHeight = dp(48); minWidth = 0; minimumWidth = 0
         setTextColor(TEXT); backgroundTintList = ColorStateList.valueOf(Color.rgb(37, 45, 53))
         setPadding(dp(6), dp(3), dp(6), dp(3)); setOnClickListener { action() }
     }
@@ -491,7 +571,46 @@ class CallActivity : ComponentActivity() {
         contentDescription = values.first()
     }
     private fun addControl(parent: GridLayout, button: Button, index: Int) {
-        parent.addView(button, GridLayout.LayoutParams(GridLayout.spec(index / 3), GridLayout.spec(index % 3, 1f)).apply { width = 0; height = dp(54); setMargins(dp(2), dp(2), dp(2), dp(2)) })
+        val columns = parent.columnCount
+        parent.addView(button, GridLayout.LayoutParams(GridLayout.spec(index / columns, GridLayout.FILL), GridLayout.spec(index % columns, 1f)).apply { width = 0; height = ViewGroup.LayoutParams.WRAP_CONTENT; setMargins(dp(2), dp(2), dp(2), dp(2)) })
+    }
+
+    private fun screenTileHeight(): Int {
+        val heightDp = if (::root.isInitialized && root.height > 0) {
+            (root.height - root.paddingTop - root.paddingBottom) / resources.displayMetrics.density
+        } else resources.configuration.screenHeightDp.toFloat()
+        return dp((heightDp * 0.45f).toInt().coerceIn(160, 255))
+    }
+
+    private fun updateResponsiveLayout() {
+        if (!::participantGrid.isInitialized || !::callControls.isInitialized) return
+        val columns = participantColumns
+        val rebuildParticipants = participantGrid.columnCount != columns
+        if (rebuildParticipants) {
+            // Remove old column specs before narrowing the grid. Tracks and
+            // the fullscreen renderer remain owned by the current call.
+            participantGrid.removeAllViews()
+            participantGrid.columnCount = columns
+            participantOrder = emptyList()
+        }
+        val tileHeight = VideoTile.preferredHeight(this)
+        tiles.values.forEach { tile ->
+            tile.layoutParams?.let { params ->
+                if (params.height != tileHeight) { params.height = tileHeight; tile.layoutParams = params }
+            }
+        }
+        if (callControls.columnCount != controlColumns) {
+            callControls.removeAllViews()
+            callControls.columnCount = controlColumns
+            listOf(microphone, camera, screen, speaker, deafen, flip).forEachIndexed { index, view -> addControl(callControls, view, index) }
+        }
+        screenTile?.let { tile ->
+            tile.layoutParams?.let { params ->
+                val height = screenTileHeight()
+                if (params.height != height) { params.height = height; tile.layoutParams = params }
+            }
+        }
+        if (rebuildParticipants) render(currentState)
     }
     private fun notice(message: String) { Toast.makeText(this, message, Toast.LENGTH_LONG).show() }
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()

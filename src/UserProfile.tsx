@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Check, Copy, Crown, LoaderCircle, Shield, UserRound } from 'lucide-react';
+import { Check, Copy, Crown, LoaderCircle, MessageSquare, Shield, UserRound } from 'lucide-react';
 import './user-profile.css';
 
 type Props = {
@@ -7,11 +7,12 @@ type Props = {
     role?: 'owner' | 'admin' | 'member';
     online?: boolean;
     onError: (message: string) => void;
+    onDirect?: () => void;
 };
 
 const roles = { owner: 'Владелец канала', admin: 'Администратор канала', member: 'Участник канала' };
 
-export function UserProfile({ user, role, online, onError }: Props) {
+export function UserProfile({ user, role, online, onError, onDirect }: Props) {
     const [copied, setCopied] = useState(false), [copying, setCopying] = useState(false);
     const active = useRef(true), identity = useRef(''), resetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
     identity.current = `${user.id}:${user.username}`;
@@ -52,6 +53,7 @@ export function UserProfile({ user, role, online, onError }: Props) {
         <div className={`user-profile-avatar profile-color-${color}`} aria-hidden="true">{user.username.slice(0, 2).toUpperCase()}{typeof online === 'boolean' && <span className={online ? 'online' : 'offline'}/>}</div>
         <div className="user-profile-heading"><span>Профиль пользователя</span><h2>@{user.username}</h2>{typeof online === 'boolean' && <p className={`user-profile-status ${online ? 'online' : 'offline'}`}><span/>{online ? 'В сети' : 'Не в сети'}</p>}</div>
         {role && <div className={`user-profile-role profile-role-${role}`}>{role === 'owner' ? <Crown size={15}/> : role === 'admin' ? <Shield size={15}/> : <UserRound size={15}/>}<span>{roles[role]}</span></div>}
+        {onDirect && <button className="primary full direct-call-button" onClick={onDirect}><MessageSquare size={17}/>Личный разговор</button>}
         <button type="button" className={`secondary user-profile-copy${copied ? ' copied' : ''}`} disabled={copying} onClick={() => { void copyUsername(); }}>{copying ? <LoaderCircle size={16} className="spin"/> : copied ? <Check size={16}/> : <Copy size={16}/>}<span aria-live="polite">{copying ? 'Копируем…' : copied ? 'Никнейм скопирован' : 'Скопировать никнейм'}</span></button>
     </section>;
 }

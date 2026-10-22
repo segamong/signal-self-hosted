@@ -5,8 +5,8 @@ import { randomBytes, randomUUID, createHash, scrypt as scryptCallback, timingSa
 import { promisify } from 'node:util';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { existsSync } from 'node:fs';
-import { openDatabase, publicUser, migrateChannelMemberships, migrateDirectInvitations, migrateChannelModeration } from './database.mjs';
+import { existsSync, readFileSync } from 'node:fs';
+import { openDatabase, publicUser, migrateChannelMemberships, migrateDirectInvitations, migrateChannelModeration, migratePrivateCalls } from './database.mjs';
 import { createMedia, MAX_PARTICIPANTS } from './media.mjs';
 import { installModerationRoutes } from './moderation.mjs';
 import { installMessageTools, messageExtras } from './message-tools.mjs';
@@ -18,6 +18,7 @@ const COOKIE_NAME = 'signal_session';
 const USERNAME = /^[a-zA-Z0-9_-]{3,32}$/;
 const SCRYPT = { N: 65536, r: 8, p: 1, maxmem: 96 * 1024 * 1024 };
 const tokenHash = (value) => createHash('sha256').update(value).digest('hex');
+const APP_VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
 
 export async function hashPassword(password) {
   const salt = randomBytes(16);
@@ -74,6 +75,7 @@ export async function createApp(options = {}) {
     migrateChannelMemberships(db, clock());
     migrateDirectInvitations(db, clock());
     migrateChannelModeration(db, clock());
+    migratePrivateCalls(db, clock());
   } catch (error) { db.close(); throw error; }
 
   let dummyHash, media;
@@ -114,31 +116,69 @@ export async function createApp(options = {}) {
     if (++bucket.count > limit) throw new HttpError(429, 'Слишком много запросов. Попробуйте позже.');
   }
 
-  const selectMemberChannel = `SELECT channels.id, channels.name, channels.description, channels.owner_id AS ownerId, memberships.role, memberships.muted
+  const selectMemberChannel = `SELECT channels.id, channels.name, channels.description, channels.kind, channels.owner_id AS ownerId, memberships.role, memberships.muted
     FROM channels JOIN memberships ON memberships.channel_id = channels.id`;
   const channelBanFilter = 'NOT EXISTS (SELECT 1 FROM channel_bans WHERE channel_bans.channel_id = channels.id AND channel_bans.user_id = memberships.user_id)';
-  const listChannels = (userId) => db.prepare(`${selectMemberChannel} WHERE memberships.user_id = ? AND ${channelBanFilter} ORDER BY channels.created_at, channels.id`).all(userId).map((channel) => ({ ...channel, muted: Boolean(channel.muted) }));
+  function channelDto(channel, userId) {
+    if (channel.kind !== 'direct') return { ...channel, kind: 'channel', maxParticipants: MAX_PARTICIPANTS, muted: Boolean(channel.muted) };
+    const pair = db.prepare('SELECT first_user_id, second_user_id FROM direct_conversations WHERE channel_id = ?').get(channel.id);
+    if (!pair || ![pair.first_user_id, pair.second_user_id].includes(userId)) throw new HttpError(404, 'Канал не найден.');
+    const peer = db.prepare('SELECT id, username FROM users WHERE id = ?').get(pair.first_user_id === userId ? pair.second_user_id : pair.first_user_id);
+    return { ...channel, name: peer.username, description: 'Личный разговор', ownerId: null, role: 'member', muted: false, maxParticipants: 2, peer };
+  }
+  const listChannels = (userId) => db.prepare(`${selectMemberChannel} WHERE memberships.user_id = ? AND ${channelBanFilter} ORDER BY channels.created_at, channels.id`).all(userId).map((channel) => channelDto(channel, userId));
   const getChannel = (id, userId) => {
     const channel = db.prepare(`${selectMemberChannel} WHERE channels.id = ? AND memberships.user_id = ? AND ${channelBanFilter}`).get(id, userId);
     if (!channel) throw new HttpError(404, 'Канал не найден.');
-    return { ...channel, muted: Boolean(channel.muted) };
+    return channelDto(channel, userId);
   };
+  function requireGroupChannel(channel) {
+    if (channel.kind === 'direct') throw new HttpError(403, 'В личном разговоре могут участвовать только два выбранных аккаунта.');
+  }
+  function getMediaKey(channelId) {
+    db.prepare('INSERT OR IGNORE INTO channel_media_keys (channel_id, key, epoch, reset_pending) VALUES (?, ?, 1, 0)').run(channelId, randomBytes(32).toString('base64url'));
+    return db.prepare('SELECT key, epoch, reset_pending FROM channel_media_keys WHERE channel_id = ?').get(channelId);
+  }
+  function rotateMediaKey(channelId) {
+    db.prepare(`INSERT INTO channel_media_keys (channel_id, key, epoch, reset_pending) VALUES (?, ?, 1, 1)
+      ON CONFLICT(channel_id) DO UPDATE SET key = excluded.key, epoch = channel_media_keys.epoch + 1, reset_pending = 1`).run(channelId, randomBytes(32).toString('base64url'));
+  }
+  const mediaResets = new Map();
+  async function resetMediaRoom(channelId) {
+    if (mediaResets.has(channelId)) return mediaResets.get(channelId);
+    const operation = (async () => {
+      for (;;) {
+        const key = db.prepare('SELECT epoch, reset_pending FROM channel_media_keys WHERE channel_id = ?').get(channelId);
+        if (!key?.reset_pending) return true;
+        try {
+          if (!media.configured || typeof media.deleteChannel !== 'function') return false;
+          await media.deleteChannel(channelId);
+          db.prepare('UPDATE channel_media_keys SET reset_pending = 0 WHERE channel_id = ? AND epoch = ?').run(channelId, key.epoch);
+        } catch { return false; }
+      }
+    })();
+    mediaResets.set(channelId, operation);
+    try { return await operation; } finally { mediaResets.delete(channelId); }
+  }
+  async function drainMediaResets() {
+    await Promise.allSettled(db.prepare('SELECT channel_id FROM channel_media_keys WHERE reset_pending = 1 LIMIT 100').all().map((row) => resetMediaRoom(row.channel_id)));
+  }
   const isBanned = (channelId, userId) => Boolean(db.prepare('SELECT 1 FROM channel_bans WHERE channel_id = ? AND user_id = ?').get(channelId, userId));
   const assertNotBanned = (channelId, userId) => { if (isBanned(channelId, userId)) throw new HttpError(403, 'Доступ в этот канал заблокирован.'); };
   const hasMembership = (channelId, userId) => !isBanned(channelId, userId) && Boolean(db.prepare('SELECT 1 FROM memberships WHERE channel_id = ? AND user_id = ?').get(channelId, userId));
   const listMembers = (channelId) => db.prepare(`SELECT users.id, users.username, memberships.role, memberships.muted FROM users JOIN memberships ON memberships.user_id = users.id WHERE memberships.channel_id = ? AND NOT EXISTS (SELECT 1 FROM channel_bans WHERE channel_bans.channel_id = memberships.channel_id AND channel_bans.user_id = users.id) ORDER BY CASE memberships.role WHEN 'owner' THEN 0 WHEN 'admin' THEN 1 ELSE 2 END, users.username COLLATE NOCASE, users.id`).all(channelId).map((member) => ({ ...member, muted: Boolean(member.muted) }));
   const getInvite = (code) => {
     if (typeof code !== 'string' || !/^[a-zA-Z0-9_-]{32}$/.test(code)) throw new HttpError(404, 'Приглашение не найдено.');
-    const invite = db.prepare(`SELECT invites.*, channels.name AS channel_name FROM invites JOIN channels ON channels.id = invites.channel_id WHERE invites.code_hash = ?`).get(tokenHash(code));
+    const invite = db.prepare(`SELECT invites.*, channels.name AS channel_name FROM invites JOIN channels ON channels.id = invites.channel_id WHERE invites.code_hash = ? AND channels.kind = 'channel'`).get(tokenHash(code));
     if (!invite) throw new HttpError(404, 'Приглашение не найдено.');
     return invite;
   };
-  const selectInvitation = `SELECT channel_invitations.*, channels.name AS channel_name, channels.description AS channel_description, users.username AS inviter_username
+  const selectInvitation = `SELECT channel_invitations.*, channels.name AS channel_name, channels.description AS channel_description, channels.kind AS channel_kind, users.username AS inviter_username
     FROM channel_invitations JOIN channels ON channels.id = channel_invitations.channel_id JOIN users ON users.id = channel_invitations.created_by`;
   function publicInvitation(row) {
     return {
       id: row.id,
-      channel: { id: row.channel_id, name: row.channel_name, description: row.channel_description },
+      channel: { id: row.channel_id, name: row.channel_kind === 'direct' ? row.inviter_username : row.channel_name, description: row.channel_kind === 'direct' ? 'Личный разговор' : row.channel_description, kind: row.channel_kind, maxParticipants: row.channel_kind === 'direct' ? 2 : MAX_PARTICIPANTS },
       inviter: { id: row.created_by, username: row.inviter_username },
       createdAt: new Date(Number(row.created_at)).toISOString(),
       expiresAt: new Date(Number(row.expires_at)).toISOString(),
@@ -217,7 +257,7 @@ export async function createApp(options = {}) {
     res.setHeader('X-Frame-Options', 'DENY');
     res.setHeader('Referrer-Policy', 'same-origin');
     res.setHeader('Permissions-Policy', 'camera=(self), microphone=(self), display-capture=(self), geolocation=()');
-    if (production) res.setHeader('Content-Security-Policy', `default-src 'self'; base-uri 'self'; frame-ancestors 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src ${[...connectOrigins].join(' ')}; worker-src 'self' blob:; object-src 'none'`);
+    if (production) res.setHeader('Content-Security-Policy', `default-src 'self'; base-uri 'self'; frame-ancestors 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src ${[...connectOrigins].join(' ')}; worker-src 'self' blob:; object-src 'none'`);
     if (req.path.startsWith('/api/')) res.setHeader('Cache-Control', 'no-store');
     next();
   });
@@ -238,7 +278,8 @@ export async function createApp(options = {}) {
       if (typeof claims.sub !== 'string' || claims.video?.roomJoin !== true || typeof claims.video.room !== 'string') return res.status(403).end();
       const channel = getChannel(claims.video.room, claims.sub);
       const account = db.prepare('SELECT username FROM users WHERE id = ?').get(claims.sub);
-      if (!account || claims.name !== account.username || claims.metadata !== JSON.stringify({ username: account.username })) return res.status(403).end();
+      const key = db.prepare('SELECT epoch, reset_pending FROM channel_media_keys WHERE channel_id = ?').get(channel.id);
+      if (!account || !key || key.reset_pending || claims.name !== account.username || claims.metadata !== JSON.stringify({ username: account.username, encryptionEpoch: String(key.epoch) })) return res.status(403).end();
       if (channel.muted && (claims.video.canPublish !== false || claims.video.canPublishSources?.length)) return res.status(403).end();
       res.status(204).end();
     } catch { res.status(403).end(); }
@@ -256,7 +297,7 @@ export async function createApp(options = {}) {
   app.use('/api', express.json({ limit: '16kb', strict: true }));
 
   app.get('/api/health', (req, res) => res.json({ ok: true, mediaConfigured: media.configured }));
-  app.get('/api/config', (req, res) => res.json({ name: 'Сигнал', maxParticipants: MAX_PARTICIPANTS, mediaConfigured: media.configured }));
+  app.get('/api/config', (req, res) => res.json({ name: 'Сигнал', version: APP_VERSION, maxParticipants: MAX_PARTICIPANTS, mediaConfigured: media.configured, mediaEncryptionRequired: true, mediaEncryptionVersion: 1 }));
   app.get('/api/me', (req, res) => res.json({ user: req.auth?.user || null }));
   app.post('/api/login', async (req, res) => {
     enforceRate(`login:${req.ip}`, 10, 15 * 60_000);
@@ -294,7 +335,7 @@ export async function createApp(options = {}) {
     const { name, description = '' } = req.body || {};
     if (typeof name !== 'string' || !name.trim() || name.trim().length > 40 || typeof description !== 'string' || description.trim().length > 180) throw new HttpError(400, 'Название: 1–40 символов, описание: до 180 символов.');
     if (db.prepare('SELECT id FROM channels WHERE name = ?').get(name.trim())) throw new HttpError(409, 'Канал с таким названием уже существует.');
-    const channel = { id: randomUUID(), name: name.trim(), description: description.trim(), ownerId: req.auth.user.id, role: 'owner', muted: false };
+    const channel = { id: randomUUID(), name: name.trim(), description: description.trim(), ownerId: req.auth.user.id, role: 'owner', muted: false, kind: 'channel', maxParticipants: MAX_PARTICIPANTS };
     db.exec('BEGIN IMMEDIATE');
     try {
       db.prepare('INSERT INTO channels (id, name, description, created_at, owner_id) VALUES (?, ?, ?, ?, ?)').run(channel.id, channel.name, channel.description, clock(), channel.ownerId);
@@ -305,6 +346,52 @@ export async function createApp(options = {}) {
     broadcastPresence();
     res.status(201).json({ channel });
   });
+  app.post('/api/direct-channels', requireAuth, (req, res) => {
+    enforceRate(`direct-channels:${req.auth.user.id}`, 20, 60_000);
+    const username = typeof req.body?.username === 'string' ? req.body.username.trim().replace(/^@/, '').toLowerCase() : '';
+    if (!USERNAME.test(username)) throw new HttpError(400, 'Укажите никнейм друга: 3–32 латинские буквы, цифры, дефис или подчёркивание.');
+    const userId = req.auth.user.id;
+    const recipient = db.prepare('SELECT id, username FROM users WHERE username = ?').get(username);
+    if (!recipient) throw new HttpError(404, 'Пользователь не найден.');
+    if (recipient.id === userId) throw new HttpError(400, 'Нельзя создать личный разговор с собой.');
+    const [firstId, secondId] = [userId, recipient.id].sort();
+    let channelId, invitationId, incoming = false, created = false, membershipChanged = false;
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      let pair = db.prepare('SELECT channel_id FROM direct_conversations WHERE first_user_id = ? AND second_user_id = ?').get(firstId, secondId);
+      const now = clock();
+      if (!pair) {
+        channelId = randomUUID();
+        db.prepare("INSERT INTO channels (id, name, description, created_at, owner_id, kind) VALUES (?, ?, '', ?, NULL, 'direct')").run(channelId, `direct:${channelId}`, now);
+        db.prepare('INSERT INTO direct_conversations (channel_id, first_user_id, second_user_id) VALUES (?, ?, ?)').run(channelId, firstId, secondId);
+        pair = { channel_id: channelId };
+        created = true;
+      }
+      channelId = pair.channel_id;
+      db.prepare("UPDATE channel_invitations SET status = 'expired' WHERE channel_id = ? AND status = 'pending' AND expires_at <= ?").run(channelId, now);
+      // A crossed request opens the existing invitation for an explicit answer.
+      const pendingIncoming = db.prepare("SELECT id FROM channel_invitations WHERE channel_id = ? AND recipient_id = ? AND status = 'pending'").get(channelId, userId);
+      if (!hasMembership(channelId, userId) && pendingIncoming) {
+        invitationId = pendingIncoming.id;
+        incoming = true;
+      } else {
+        membershipChanged = db.prepare("INSERT OR IGNORE INTO memberships (channel_id, user_id, role, joined_at) VALUES (?, ?, 'member', ?)").run(channelId, userId, now).changes === 1;
+        if (membershipChanged && !created) rotateMediaKey(channelId);
+        if (!hasMembership(channelId, recipient.id)) {
+          const pending = db.prepare("SELECT id FROM channel_invitations WHERE channel_id = ? AND recipient_id = ? AND status = 'pending'").get(channelId, recipient.id);
+          invitationId = pending?.id || randomUUID();
+          if (!pending) db.prepare("INSERT INTO channel_invitations (id, channel_id, created_by, recipient_id, status, created_at, expires_at) VALUES (?, ?, ?, ?, 'pending', ?, ?)").run(invitationId, channelId, userId, recipient.id, now, now + INVITATION_MS);
+        }
+      }
+      db.exec('COMMIT');
+    } catch (error) { db.exec('ROLLBACK'); throw error; }
+    broadcastChannels(userId);
+    broadcastInvitations(recipient.id);
+    broadcastPresence();
+    if (membershipChanged && !created) void resetMediaRoom(channelId);
+    const invitation = invitationId ? publicInvitation(invitationById(invitationId, incoming ? userId : recipient.id)) : null;
+    res.status(created ? 201 : 200).json({ channel: incoming ? null : getChannel(channelId, userId), invitation, requiresAcceptance: incoming });
+  });
   app.get('/api/channels/:id/members', requireAuth, (req, res) => {
     getChannel(req.params.id, req.auth.user.id);
     res.json({ members: listMembers(req.params.id) });
@@ -312,6 +399,7 @@ export async function createApp(options = {}) {
   app.get('/api/invitations', requireAuth, (req, res) => res.json({ invitations: listInvitations(req.auth.user.id) }));
   app.post('/api/channels/:id/invitations', requireAuth, (req, res) => {
     const channel = getChannel(req.params.id, req.auth.user.id);
+    requireGroupChannel(channel);
     if (!['owner', 'admin'].includes(channel.role)) throw new HttpError(403, 'Приглашать участников может администратор канала.');
     const username = typeof req.body?.username === 'string' ? req.body.username.trim().replace(/^@/, '').toLowerCase() : '';
     if (!USERNAME.test(username)) throw new HttpError(400, 'Укажите имя пользователя: 3–32 латинские буквы, цифры, дефис или подчёркивание.');
@@ -338,11 +426,11 @@ export async function createApp(options = {}) {
     broadcastInvitations(recipient.id);
     res.status(created ? 201 : 200).json({ invitation });
   });
-  app.post('/api/invitations/:id/respond', requireAuth, (req, res) => {
+  app.post('/api/invitations/:id/respond', requireAuth, async (req, res) => {
     const action = req.body?.action;
     if (action !== 'accept' && action !== 'decline') throw new HttpError(400, 'Выберите accept или decline.');
     const decision = action === 'accept' ? 'accepted' : 'declined';
-    let row;
+    let row, membershipChanged = false;
     db.exec('BEGIN IMMEDIATE');
     try {
       row = invitationById(req.params.id, req.auth.user.id);
@@ -352,7 +440,14 @@ export async function createApp(options = {}) {
         if (row.status !== decision) throw new HttpError(409, row.status === 'expired' ? 'Срок приглашения истёк.' : 'На приглашение уже дан другой ответ.');
       } else {
         if (row.expires_at <= clock()) throw new HttpError(409, 'Срок приглашения истёк.');
-        if (decision === 'accepted') db.prepare("INSERT OR IGNORE INTO memberships (channel_id, user_id, role, joined_at) VALUES (?, ?, 'member', ?)").run(row.channel_id, req.auth.user.id, clock());
+        if (decision === 'accepted') {
+          if (row.channel_kind === 'direct') {
+            const pair = db.prepare('SELECT first_user_id, second_user_id FROM direct_conversations WHERE channel_id = ?').get(row.channel_id);
+            if (!pair || ![pair.first_user_id, pair.second_user_id].includes(req.auth.user.id) || ![pair.first_user_id, pair.second_user_id].includes(row.created_by)) throw new HttpError(403, 'Это приглашение не предназначено для вашего аккаунта.');
+          }
+          membershipChanged = db.prepare("INSERT OR IGNORE INTO memberships (channel_id, user_id, role, joined_at) VALUES (?, ?, 'member', ?)").run(row.channel_id, req.auth.user.id, clock()).changes === 1;
+          if (membershipChanged) rotateMediaKey(row.channel_id);
+        }
         db.prepare('UPDATE channel_invitations SET status = ?, responded_at = ? WHERE id = ?').run(decision, clock(), row.id);
       }
       row = invitationById(row.id, req.auth.user.id);
@@ -360,14 +455,16 @@ export async function createApp(options = {}) {
     } catch (error) { db.exec('ROLLBACK'); throw error; }
     broadcastInvitations(req.auth.user.id);
     if (decision === 'accepted') {
-      broadcastChannels(req.auth.user.id);
+      broadcastChannels();
       broadcastPresence();
+      if (membershipChanged) await resetMediaRoom(row.channel_id);
       return res.json({ invitation: publicInvitation(row), channel: getChannel(row.channel_id, req.auth.user.id) });
     }
     res.json({ invitation: publicInvitation(row) });
   });
   app.post('/api/channels/:id/invites', requireAuth, (req, res) => {
     const channel = getChannel(req.params.id, req.auth.user.id);
+    requireGroupChannel(channel);
     if (!['owner', 'admin'].includes(channel.role)) throw new HttpError(403, 'Приглашать участников может администратор канала.');
     enforceRate(`invites:${req.auth.user.id}`, 10, 60_000);
     const { maxUses = 10, expiresInHours = 168 } = req.body || {};
@@ -382,9 +479,10 @@ export async function createApp(options = {}) {
     if (req.auth) assertNotBanned(invite.channel_id, req.auth.user.id);
     res.json({ channel: { id: invite.channel_id, name: invite.channel_name }, expiresAt: new Date(Number(invite.expires_at)).toISOString(), valid: invite.expires_at > clock() && invite.uses < invite.max_uses });
   });
-  app.post('/api/invites/:code/join', requireAuth, (req, res) => {
+  app.post('/api/invites/:code/join', requireAuth, async (req, res) => {
     enforceRate(`invite-join:${req.auth.user.id}`, 30, 60_000);
     const invite = getInvite(req.params.code);
+    let membershipChanged = false;
     db.exec('BEGIN IMMEDIATE');
     try {
       assertNotBanned(invite.channel_id, req.auth.user.id);
@@ -392,12 +490,15 @@ export async function createApp(options = {}) {
         const update = db.prepare('UPDATE invites SET uses = uses + 1 WHERE code_hash = ? AND expires_at > ? AND uses < max_uses').run(invite.code_hash, clock());
         if (update.changes !== 1) throw new HttpError(400, 'Приглашение истекло или уже использовано.');
         db.prepare("INSERT INTO memberships (channel_id, user_id, role, joined_at) VALUES (?, ?, 'member', ?)").run(invite.channel_id, req.auth.user.id, clock());
+        rotateMediaKey(invite.channel_id);
+        membershipChanged = true;
       }
       db.exec('COMMIT');
     } catch (error) { db.exec('ROLLBACK'); throw error; }
     const channel = getChannel(invite.channel_id, req.auth.user.id);
     broadcastChannels(req.auth.user.id);
     broadcastPresence();
+    if (membershipChanged) await resetMediaRoom(invite.channel_id);
     res.json({ channel });
   });
   app.get('/api/channels/:id/messages', requireAuth, (req, res) => {
@@ -422,9 +523,15 @@ export async function createApp(options = {}) {
   app.post('/api/channels/:id/join', requireAuth, async (req, res) => {
     const channel = getChannel(req.params.id, req.auth.user.id);
     enforceRate(`join:${req.auth.user.id}`, 20, 60_000);
+    if (req.body?.encryptionVersion !== 1) throw new HttpError(426, 'Обновите приложение или страницу: для звонков требуется поддержка шифрования версии 1.');
     if (!media.configured) throw new HttpError(503, 'Голос и видео ещё не настроены. Администратору нужно указать параметры LiveKit.');
+    getMediaKey(channel.id);
+    if (!await resetMediaRoom(channel.id)) throw new HttpError(503, 'Не удалось обновить защищённую комнату. Повторите подключение.');
+    // Membership and key generation are re-read after any awaited room reset.
+    const joinedChannel = getChannel(channel.id, req.auth.user.id);
+    const key = getMediaKey(channel.id);
     let credentials;
-    try { credentials = await media.join(channel, req.auth.user); }
+    try { credentials = await media.join({ ...joinedChannel, encryptionEpoch: String(key.epoch) }, req.auth.user); }
     catch (error) {
       if (error.status === 409) throw error;
       throw new HttpError(503, 'Медиасервер недоступен. Проверьте LiveKit, его адрес и открытые UDP-порты.');
@@ -432,8 +539,9 @@ export async function createApp(options = {}) {
     // A logout or expiry while awaiting the SFU must not issue a new media grant.
     if (!sessionUser(req)) throw new HttpError(401, 'Сессия завершена. Войдите снова.');
     const current = getChannel(channel.id, req.auth.user.id);
-    if (current.muted !== channel.muted) throw new HttpError(409, 'Права публикации изменились. Подключитесь повторно.');
-    res.json(credentials);
+    const currentKey = getMediaKey(channel.id);
+    if (current.muted !== joinedChannel.muted || currentKey.epoch !== key.epoch || currentKey.reset_pending) throw new HttpError(409, 'Состав или права комнаты изменились. Подключитесь повторно.');
+    res.json({ ...credentials, encryption: { required: true, key: key.key, epoch: String(key.epoch), algorithm: 'AES-GCM', keyDerivation: 'PBKDF2' } });
   });
   app.get('/api/status', requireAuth, async (req, res) => {
     if (!media.configured) return res.json({ rooms: [], maxParticipants: MAX_PARTICIPANTS, mediaConfigured: false });
@@ -456,14 +564,14 @@ export async function createApp(options = {}) {
     }
     catch (error) { if (error instanceof HttpError) throw error; throw new HttpError(503, 'Не удалось получить состояние медиасервера. Проверьте LiveKit.'); }
   });
-  const moderationRoutes = installModerationRoutes(app, { db, clock, media, HttpError, requireAuth, sessionUser, getChannel, listMembers, broadcastChannels, broadcastInvitations, broadcastPresence, notifyModeration });
+  const moderationRoutes = installModerationRoutes(app, { db, clock, media, HttpError, requireAuth, sessionUser, getChannel, listMembers, broadcastChannels, broadcastInvitations, broadcastPresence, notifyModeration, rotateMediaKey, resetMediaRoom });
   installMessageTools({ app, db, requireAuth, getChannel, clock, broadcastToChannel, HttpError });
   app.use('/api', (req, res) => res.status(404).json({ error: 'Метод API не найден.' }));
 
   const dist = options.staticDir || resolve(dirname(fileURLToPath(import.meta.url)), '../dist');
   if (existsSync(resolve(dist, 'index.html'))) {
     app.use(express.static(dist, { index: false, maxAge: '1h', dotfiles: 'deny', setHeaders(res, filePath) {
-      if (filePath.replace(/\\/g, '/').endsWith('/downloads/latest.json')) res.setHeader('Cache-Control', 'no-store');
+      if (/\/downloads\/(?:android\/)?latest\.json$/.test(filePath.replace(/\\/g, '/'))) res.setHeader('Cache-Control', 'no-store');
     } }));
     app.get('/{*path}', (req, res) => { res.setHeader('Cache-Control', 'no-cache'); res.sendFile(resolve(dist, 'index.html')); });
   }
@@ -510,15 +618,21 @@ export async function createApp(options = {}) {
   }, 30_000);
   heartbeat.unref();
 
+  const mediaResetTimer = setInterval(() => { void drainMediaResets().catch(() => {}); }, 5000);
+  mediaResetTimer.unref();
+  void drainMediaResets().catch(() => {});
+
   let closed = false;
   async function close() {
     if (closed) return;
     closed = true;
     clearInterval(heartbeat);
+    clearInterval(mediaResetTimer);
     for (const ws of sockets.keys()) ws.terminate();
     await new Promise((resolveClose) => wss.close(resolveClose));
     if (server.listening) await new Promise((resolveClose) => server.close(resolveClose));
     await moderationRoutes.close();
+    await Promise.allSettled([...mediaResets.values()]);
     db.close();
   }
   syncMediaUsernames();

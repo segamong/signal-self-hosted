@@ -21,8 +21,12 @@ import com.twilio.audioswitch.AudioDevice
 import com.twilio.audioswitch.AudioDeviceChangeListener
 import io.livekit.android.LiveKit
 import io.livekit.android.LiveKitOverrides
+import io.livekit.android.ConnectOptions
 import io.livekit.android.RoomOptions
 import io.livekit.android.audio.ScreenAudioCapturer
+import io.livekit.android.e2ee.BaseKeyProvider
+import io.livekit.android.e2ee.E2EEOptions
+import io.livekit.android.e2ee.E2EEState
 import io.livekit.android.events.RoomEvent
 import io.livekit.android.events.collect
 import io.livekit.android.room.Room
@@ -55,6 +59,8 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import livekit.org.webrtc.RtpParameters
+import livekit.org.webrtc.FrameCryptorKeyDerivationAlgorithm
+import livekit.LivekitModels
 
 data class CallParticipant(
     val id: String,
@@ -166,9 +172,18 @@ class CallService : Service() {
                 require(media.scheme == "wss" && media.host == "13.143.172.92" && media.port == 9443 && media.userInfo == null && media.fragment == null) { "media origin" }
                 if (owner != generation) return@launch
                 usernames = mapOf(user.id to user.username)
+                // Initialize native WebRTC before constructing its key provider.
+                LiveKit.init(applicationContext)
+                val keyProvider = BaseKeyProvider(
+                    enableSharedKey = true,
+                    discardFrameWhenCryptorNotReady = true,
+                    keyDerivationAlgorithm = FrameCryptorKeyDerivationAlgorithm.PBKDF2,
+                )
+                if (!keyProvider.setSharedKey(credentials.encryptionKey)) throw SignalEncryptionException("Не удалось подготовить шифрование звонка. Подключение отменено.")
                 val nextRoom = LiveKit.create(applicationContext, RoomOptions(
                     adaptiveStream = false,
                     dynacast = true,
+                    e2eeOptions = E2EEOptions(keyProvider = keyProvider, encryptionType = LivekitModels.Encryption.Type.GCM),
                     videoTrackCaptureDefaults = LocalVideoTrackOptions(captureParams = VideoCaptureParameter(1920, 1080, 30)),
                     videoTrackPublishDefaults = VideoTrackPublishDefaults(videoEncoding = VideoEncoding(3_500_000, 30), videoCodec = "h264"),
                     screenShareTrackCaptureDefaults = LocalVideoTrackOptions(isScreencast = true, captureParams = VideoCaptureParameter(0, 0, 30, adaptOutputToDimensions = false)),
@@ -187,8 +202,18 @@ class CallService : Service() {
                                 refreshMembers(channelId, owner)
                             }
                             is RoomEvent.ParticipantConnected -> refreshMembers(channelId, owner)
+                            is RoomEvent.TrackE2EEStateEvent -> {
+                                if (event.state in setOf(E2EEState.MISSING_KEY, E2EEState.ENCRYPTION_FAILED, E2EEState.DECRYPTION_FAILED, E2EEState.INTERNAL_ERROR)) {
+                                    finishCall("Не удалось подтвердить шифрование медиа. Подключитесь к каналу снова.")
+                                    return@collect
+                                }
+                            }
                             is RoomEvent.Disconnected -> {
-                                val message = if (event.reason.name in setOf("PARTICIPANT_REMOVED", "ROOM_DELETED")) "Доступ к звонку завершён владельцем или администратором." else "Соединение завершено. Подключитесь к каналу снова."
+                                val message = when (event.reason.name) {
+                                    "ROOM_DELETED" -> "Состав или доступ к комнате изменился. Подключитесь снова для обновления шифрования."
+                                    "PARTICIPANT_REMOVED" -> "Доступ к звонку завершён владельцем или администратором."
+                                    else -> "Соединение завершено. Подключитесь к каналу снова."
+                                }
                                 finishCall(message)
                                 return@collect
                             }
@@ -197,13 +222,20 @@ class CallService : Service() {
                         syncRoom(nextRoom)
                     }
                 }
-                nextRoom.connect(credentials.url, credentials.token)
+                // Validate publication encryption before subscribing; a legacy
+                // plaintext microphone must never play while an event is handled.
+                nextRoom.connect(credentials.url, credentials.token, ConnectOptions(autoSubscribe = false))
                 if (owner != generation || room !== nextRoom) return@launch
+                if (nextRoom.e2eeManager?.enabled != true) throw SignalEncryptionException("Шифрование звонка не включилось. Подключение отменено.")
                 mutableState.value = mutableState.value.copy(phase = "connected", error = null)
                 refreshMembers(channelId, owner)
                 syncRoom(nextRoom)
             } catch (cancelled: CancellationException) {
                 throw cancelled
+            } catch (error: SignalEncryptionException) {
+                if (owner == generation) finishCall(error.message ?: "Не удалось подготовить защищённый звонок.")
+            } catch (error: SignalApiException) {
+                if (owner == generation) finishCall(if (error.status == 426) "Обновите приложение: сервер требует новую версию шифрования звонка." else "Не удалось подключиться к звонку. Проверьте вход в аккаунт и доступ к каналу.")
             } catch (_: Exception) {
                 if (owner == generation) finishCall("Не удалось подключиться к звонку. Проверьте вход в аккаунт, доступ к каналу и соединение.")
             }
@@ -225,18 +257,21 @@ class CallService : Service() {
 
     private fun syncRoom(current: Room) {
         if (room !== current) return
+        if (current.remoteParticipants.values.any { participant -> participant.trackPublications.values.any { it.encryptionType != LivekitModels.Encryption.Type.GCM } }) {
+            finishCall("Участник использует версию без шифрования. Для звонка всем нужно обновить приложение или страницу.")
+            return
+        }
         val participants: List<Participant> = listOf(current.localParticipant) + current.remoteParticipants.values
         val sharing = participants.filter { it.getTrackPublication(Track.Source.SCREEN_SHARE)?.muted == false }
         if (sharing.none { it.identity?.value == selectedScreenId }) selectedScreenId = sharing.firstOrNull()?.identity?.value
         val deafened = mutableState.value.deafened
         for (participant in current.remoteParticipants.values) {
             for (publication in participant.trackPublications.values) {
-                if (publication.source == Track.Source.SCREEN_SHARE || publication.source == Track.Source.SCREEN_SHARE_AUDIO) {
-                    val wanted = participant.identity?.value == selectedScreenId
-                    val remote = publication as? io.livekit.android.room.track.RemoteTrackPublication ?: continue
-                    if (remote.isDesired != wanted) remote.setSubscribed(wanted)
-                    if (wanted && remote.source == Track.Source.SCREEN_SHARE) remote.setVideoQuality(VideoQuality.HIGH)
-                }
+                val screen = publication.source == Track.Source.SCREEN_SHARE || publication.source == Track.Source.SCREEN_SHARE_AUDIO
+                val wanted = !screen || participant.identity?.value == selectedScreenId
+                val remote = publication as? io.livekit.android.room.track.RemoteTrackPublication ?: continue
+                if (remote.isDesired != wanted) remote.setSubscribed(wanted)
+                if (wanted && remote.source == Track.Source.SCREEN_SHARE) remote.setVideoQuality(VideoQuality.HIGH)
                 (publication.track as? RemoteAudioTrack)?.setVolume(if (deafened) 0.0 else 1.0)
             }
         }

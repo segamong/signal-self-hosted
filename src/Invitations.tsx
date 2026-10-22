@@ -1,11 +1,11 @@
 import { useEffect, useId, useRef, useState, type FormEvent } from 'react';
-import { AtSign, Check, CheckCircle2, Hash, Inbox as InboxIcon, LoaderCircle, Send, X } from 'lucide-react';
+import { AtSign, Check, CheckCircle2, Hash, Inbox as InboxIcon, LoaderCircle, MessageSquare, Send, X } from 'lucide-react';
 import { api } from './api';
 import './invitations.css';
 
 export type Invitation = {
   id: string;
-  channel: { id: string; name: string; description: string };
+  channel: { id: string; name: string; description: string; kind?: 'channel' | 'direct'; maxParticipants?: number };
   inviter: { id: string; username: string };
   createdAt: string;
   expiresAt: string;
@@ -147,27 +147,28 @@ export function Inbox({ invitations, onRespond, onClose, busyId }: InboxProps) {
     }
   }
 
-  return <section className="invitation-inbox" aria-label="Приглашения в каналы">
+  return <section className="invitation-inbox" aria-label="Приглашения в каналы и личные разговоры">
     {responseError && <p className="form-error invitation-inbox-error" role="alert">{responseError}</p>}
     {invitations.length === 0 ? <div className="invitation-inbox-empty">
       <span className="invitation-inbox-empty-icon" aria-hidden="true"><InboxIcon size={28} /></span>
       <h3>Пока нет приглашений</h3>
-      <p>Когда вас пригласят по имени аккаунта, приглашение появится здесь. Вы сможете решить, вступать ли в канал.</p>
+      <p>Приглашения по никнейму появятся здесь. Вы сами решаете, вступать ли в канал или начинать личный разговор.</p>
     </div> : <>
-      <p className="invitation-inbox-intro">Вступайте в каналы, в которых хотите общаться.</p>
+      <p className="invitation-inbox-intro">Принимайте приглашения от тех, с кем хотите общаться.</p>
       <ul className="invitation-inbox-list">
         {invitations.map(invitation => {
           const unavailable = invitationState(invitation);
           const busy = busyId === invitation.id;
+          const direct = invitation.channel.kind === 'direct';
           return <li className="invitation-inbox-card" key={invitation.id} aria-busy={busy}>
             <div className="invitation-inbox-card-heading">
-              <span className="invitation-inbox-channel-icon" aria-hidden="true"><Hash size={20} /></span>
+              <span className="invitation-inbox-channel-icon" aria-hidden="true">{direct ? <MessageSquare size={20} /> : <Hash size={20} />}</span>
               <div className="invitation-inbox-channel-info">
-                <h3>#{invitation.channel.name}</h3>
-                <p>Приглашает <strong>@{invitation.inviter.username}</strong></p>
+                <h3>{direct ? `Разговор с @${invitation.inviter.username}` : `#${invitation.channel.name}`}</h3>
+                <p>{direct ? 'Личный канал для вас двоих' : <>Приглашает <strong>@{invitation.inviter.username}</strong></>}</p>
               </div>
             </div>
-            {invitation.channel.description && <p className="invitation-inbox-description">{invitation.channel.description}</p>}
+            {direct ? <p className="invitation-inbox-description">Переписка, голос, видео и экран. Собеседник получит доступ к разговору с вами, когда вы примете приглашение.</p> : invitation.channel.description && <p className="invitation-inbox-description">{invitation.channel.description}</p>}
             <p className="invitation-inbox-expiry"><time dateTime={invitation.expiresAt}>{expirationLabel(invitation.expiresAt)}</time></p>
             {unavailable ? <span className="invitation-inbox-state">{unavailable}</span> : <div className="invitation-inbox-actions">
               <button type="button" className="primary" disabled={busy} onClick={() => { void respond(invitation.id, 'accept'); }}>

@@ -34,7 +34,7 @@ let capture = null;
 let pendingInvites = [];
 let settings = { openAtLogin: false, closeToTray: true, window: { width: 1440, height: 920, maximized: false } };
 
-const CSP = `default-src 'none'; base-uri 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; media-src 'self' blob:; connect-src ${SERVER_ORIGIN} ${SERVER_ORIGIN.replace('https:', 'wss:')}; worker-src 'self' blob:; object-src 'none'; frame-src 'none'; frame-ancestors 'none'; form-action 'none'`;
+const CSP = `default-src 'none'; base-uri 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; media-src 'self' blob:; connect-src 'self' ${SERVER_ORIGIN} ${SERVER_ORIGIN.replace('https:', 'wss:')}; worker-src 'self' blob:; object-src 'none'; frame-src 'none'; frame-ancestors 'none'; form-action 'none'`;
 const PICKER_CSP = "default-src 'none'; base-uri 'none'; script-src 'self'; style-src 'self'; img-src data:; object-src 'none'; frame-src 'none'; frame-ancestors 'none'; form-action 'none'";
 
 function preferencesPath() { return path.join(app.getPath('userData'), 'desktop-settings.json'); }
@@ -235,6 +235,7 @@ function configureSession() {
       const response = await net.fetch(pathToFileURL(filename).href);
       const headers = new Headers(response.headers);
       headers.set('Content-Security-Policy', url.hostname === 'signal' ? CSP : PICKER_CSP);
+      if (filename.endsWith('.wasm')) headers.set('Content-Type', 'application/wasm');
       headers.set('X-Content-Type-Options', 'nosniff');
       headers.set('Cache-Control', 'no-store');
       return new Response(request.method === 'HEAD' ? null : response.body, { status: response.status, headers });

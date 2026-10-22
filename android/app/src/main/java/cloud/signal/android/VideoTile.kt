@@ -8,6 +8,7 @@ import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.text.TextUtils
+import android.util.TypedValue
 import android.view.GestureDetector
 import android.view.Gravity
 import android.view.MotionEvent
@@ -16,12 +17,18 @@ import android.view.WindowInsets
 import android.view.WindowInsetsController
 import android.view.WindowManager
 import android.widget.FrameLayout
+import android.widget.ImageButton
+import android.widget.ImageView
+import android.widget.LinearLayout
 import android.widget.TextView
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import io.livekit.android.room.Room
 import io.livekit.android.room.track.VideoTrack
 import livekit.org.webrtc.RendererCommon
 import livekit.org.webrtc.SurfaceViewRenderer
 import java.util.Locale
+import kotlin.math.roundToInt
 
 /** A view owns its renderer, while the call owns the video track and room. */
 class VideoTile(context: Context, private val room: Room) : FrameLayout(context) {
@@ -40,9 +47,15 @@ class VideoTile(context: Context, private val room: Room) : FrameLayout(context)
     private val placeholder = FrameLayout(context).apply {
         setBackgroundColor(TILE_COLOR)
     }
+    private val placeholderContent = LinearLayout(context).apply {
+        orientation = LinearLayout.VERTICAL
+        gravity = Gravity.CENTER
+        setPadding(dp(8), dp(8), dp(8), dp(8))
+    }
     private val initials = TextView(context).apply {
         gravity = Gravity.CENTER
-        textSize = 32f
+        textSize = 28f
+        includeFontPadding = false
         setTextColor(Color.WHITE)
         typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
         background = rounded(AVATAR_COLOR, dp(26).toFloat())
@@ -51,6 +64,7 @@ class VideoTile(context: Context, private val room: Room) : FrameLayout(context)
     private val name = TextView(context).apply {
         setTextColor(Color.WHITE)
         textSize = 13f
+        includeFontPadding = false
         typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
         maxLines = 1
         ellipsize = TextUtils.TruncateAt.END
@@ -60,10 +74,13 @@ class VideoTile(context: Context, private val room: Room) : FrameLayout(context)
     private val mediaLabel = TextView(context).apply {
         setTextColor(SECONDARY_COLOR)
         textSize = 12f
+        includeFontPadding = false
         gravity = Gravity.CENTER
+        maxLines = 2
+        ellipsize = TextUtils.TruncateAt.END
         importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
     }
-    private val fullscreen = actionButton(context, "⛶").apply {
+    private val fullscreen = actionButton(context, R.drawable.ic_fullscreen).apply {
         contentDescription = "Открыть видео на весь экран"
         isEnabled = false
         visibility = View.GONE
@@ -71,26 +88,54 @@ class VideoTile(context: Context, private val room: Room) : FrameLayout(context)
     }
 
     init {
-        minimumHeight = dp(156)
+        minimumHeight = preferredHeight(context)
         background = rounded(TILE_COLOR, dp(14).toFloat(), BORDER_COLOR)
         clipToOutline = true
         addView(placeholder, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
-        placeholder.addView(initials, LayoutParams(dp(72), dp(72), Gravity.CENTER).apply {
-            bottomMargin = dp(18)
-        })
-        placeholder.addView(mediaLabel, LayoutParams(LayoutParams.MATCH_PARENT, dp(24), Gravity.CENTER).apply {
-            topMargin = dp(76)
+        placeholder.addView(placeholderContent, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
+        placeholderContent.addView(initials, LinearLayout.LayoutParams(dp(56), dp(56)))
+        placeholderContent.addView(mediaLabel, LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
+            topMargin = dp(8)
         })
         addView(name, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT, Gravity.BOTTOM or Gravity.START).apply {
             marginStart = dp(10)
             bottomMargin = dp(10)
-            marginEnd = dp(64)
+            marginEnd = dp(10)
         })
         addView(fullscreen, LayoutParams(dp(48), dp(48), Gravity.TOP or Gravity.END).apply {
             topMargin = dp(4)
             marginEnd = dp(4)
         })
         bind(null, "Участник")
+    }
+
+    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+        val width = MeasureSpec.getSize(widthMeasureSpec)
+        val height = if (MeasureSpec.getMode(heightMeasureSpec) == MeasureSpec.UNSPECIFIED) minimumHeight else MeasureSpec.getSize(heightMeasureSpec)
+        // The username owns a footer. The avatar and media status share only
+        // the remaining area, rather than competing with absolute offsets.
+        val nameWidth = (width - paddingLeft - paddingRight - dp(20)).coerceAtLeast(0)
+        if (name.maxWidth != nameWidth) name.maxWidth = nameWidth
+        name.measure(MeasureSpec.makeMeasureSpec(name.maxWidth, MeasureSpec.AT_MOST), MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED))
+        val footer = name.measuredHeight + dp(16)
+        (placeholder.layoutParams as LayoutParams).bottomMargin = footer
+        val available = (height - paddingTop - paddingBottom - footer - dp(16)).coerceAtLeast(0)
+        val statusLines = if (mediaLabel.lineHeight * 2 <= available) 2 else 1
+        if (mediaLabel.maxLines != statusLines) mediaLabel.maxLines = statusLines
+        mediaLabel.measure(
+            MeasureSpec.makeMeasureSpec((width - paddingLeft - paddingRight - dp(16)).coerceAtLeast(0), MeasureSpec.EXACTLY),
+            MeasureSpec.makeMeasureSpec(available, MeasureSpec.AT_MOST),
+        )
+        val avatarSize = minOf(dp(56), available - mediaLabel.measuredHeight - dp(8))
+        val showAvatar = avatarSize >= dp(28)
+        initials.visibility = if (showAvatar) View.VISIBLE else View.GONE
+        if (showAvatar) {
+            initials.layoutParams.width = avatarSize
+            initials.layoutParams.height = avatarSize
+            initials.setTextSize(TypedValue.COMPLEX_UNIT_PX, minOf(28f * resources.displayMetrics.scaledDensity, avatarSize * 0.48f))
+        }
+        (mediaLabel.layoutParams as LinearLayout.LayoutParams).topMargin = if (showAvatar) dp(8) else 0
+        super.onMeasure(widthMeasureSpec, heightMeasureSpec)
     }
 
     /** Call on the UI thread. [username] comes from the account directory, not a LiveKit identity. */
@@ -101,6 +146,7 @@ class VideoTile(context: Context, private val room: Room) : FrameLayout(context)
         name.contentDescription = visibleName
         initials.text = initialsFor(visibleName)
         mediaLabel.text = if (screen) "Демонстрация экрана" else "Камера выключена"
+        contentDescription = "$visibleName. " + if (track == null) mediaLabel.text else if (screen) "Демонстрация экрана" else "Камера"
         fullscreen.contentDescription = if (screen) {
             "Демонстрация экрана $visibleName на весь экран"
         } else {
@@ -177,6 +223,7 @@ class VideoTile(context: Context, private val room: Room) : FrameLayout(context)
             runCatching { video.release() }
             placeholder.visibility = View.VISIBLE
             mediaLabel.text = "Видео временно недоступно"
+            contentDescription = "${name.text}. Видео временно недоступно"
         }
     }
 
@@ -197,6 +244,12 @@ class VideoTile(context: Context, private val room: Room) : FrameLayout(context)
         private val AVATAR_COLOR = Color.rgb(91, 103, 190)
         private val SECONDARY_COLOR = Color.rgb(174, 180, 199)
         private val OVERLAY_COLOR = Color.argb(220, 19, 21, 28)
+
+        /** Grid hosts can reserve more room when Android uses larger fonts. */
+        fun preferredHeight(context: Context): Int {
+            val extraScale = (context.resources.configuration.fontScale - 1f).coerceAtLeast(0f)
+            return pixels(context, 155) + (pixels(context, 64) * extraScale).roundToInt()
+        }
 
         /**
          * The caller can dismiss the returned dialog when its call or publication ends.
@@ -238,6 +291,15 @@ class VideoTile(context: Context, private val room: Room) : FrameLayout(context)
                 video.setEnableHardwareScaler(false)
                 video.setMirror(mirror)
                 video.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+                val gestures = GestureDetector(activity, object : GestureDetector.SimpleOnGestureListener() {
+                    override fun onDown(event: MotionEvent): Boolean = true
+                    override fun onDoubleTap(event: MotionEvent): Boolean { dialog.dismiss(); return true }
+                })
+                video.setOnTouchListener { view, event ->
+                    val handled = gestures.onTouchEvent(event)
+                    if (event.actionMasked == MotionEvent.ACTION_UP) view.performClick()
+                    handled
+                }
                 root.addView(video, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
                 val visibleName = username.trim().ifEmpty { "Участник" }
                 val title = TextView(activity).apply {
@@ -254,14 +316,19 @@ class VideoTile(context: Context, private val room: Room) : FrameLayout(context)
                     marginEnd = pixels(activity, 16)
                     bottomMargin = pixels(activity, 20)
                 })
-                val close = actionButton(activity, "×").apply {
-                    contentDescription = "Закрыть полноэкранное видео"
+                val close = actionButton(activity, R.drawable.ic_fullscreen_exit).apply {
+                    contentDescription = "Свернуть полноэкранное видео"
                     setOnClickListener { dialog.dismiss() }
                 }
                 root.addView(close, LayoutParams(pixels(activity, 48), pixels(activity, 48), Gravity.TOP or Gravity.END).apply {
                     topMargin = pixels(activity, 12)
                     marginEnd = pixels(activity, 12)
                 })
+                ViewCompat.setOnApplyWindowInsetsListener(root) { view, insets ->
+                    val safe = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
+                    view.setPadding(safe.left, safe.top, safe.right, safe.bottom)
+                    insets
+                }
                 dialog.setContentView(root)
                 dialog.setCanceledOnTouchOutside(false)
                 dialog.show()
@@ -291,11 +358,10 @@ class VideoTile(context: Context, private val room: Room) : FrameLayout(context)
             }
         }
 
-        private fun actionButton(context: Context, glyph: String): TextView = TextView(context).apply {
-            text = glyph
-            gravity = Gravity.CENTER
-            textSize = 27f
-            setTextColor(Color.WHITE)
+        private fun actionButton(context: Context, icon: Int): ImageButton = ImageButton(context).apply {
+            setImageResource(icon)
+            scaleType = ImageView.ScaleType.CENTER_INSIDE
+            setPadding(pixels(context, 12), pixels(context, 12), pixels(context, 12), pixels(context, 12))
             background = rounded(OVERLAY_COLOR, pixels(context, 12).toFloat())
             isClickable = true
             isFocusable = true
@@ -319,6 +385,10 @@ class VideoTile(context: Context, private val room: Room) : FrameLayout(context)
             (value * context.resources.displayMetrics.density + 0.5f).toInt()
 
         private fun initialsFor(username: String): String = username
+            // Labels can append "· вы" or "· экран". Account usernames
+            // cannot contain the separator; it must not become an initial.
+            .substringBefore('·')
+            .trim()
             .split(Regex("\\s+"))
             .filter { it.isNotEmpty() }
             .take(2)

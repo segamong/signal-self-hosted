@@ -19,16 +19,17 @@ export function createMedia(env, dependencies = {}) {
     configured: true,
     async verifyAccessToken(token) { return verifier.verify(token, 0); },
     async join(channel, user) {
+      const capacity = channel.kind === 'direct' ? 2 : MAX_PARTICIPANTS;
       // The SFU enforces this capacity even when several clients join at once.
-      await rooms.createRoom({ name: channel.id, maxParticipants: MAX_PARTICIPANTS, emptyTimeout: 300, departureTimeout: 30 });
+      await rooms.createRoom({ name: channel.id, maxParticipants: capacity, emptyTimeout: 300, departureTimeout: 30 });
       const participants = await rooms.listParticipants(channel.id);
-      if (participants.length >= MAX_PARTICIPANTS && !participants.some((p) => p.identity === user.id)) {
-        const error = new Error('Канал заполнен: максимум 10 участников.');
+      if (participants.length >= capacity && !participants.some((p) => p.identity === user.id)) {
+        const error = new Error(`Канал заполнен: максимум ${capacity} ${capacity === 2 ? 'участника' : 'участников'}.`);
         error.status = 409;
         throw error;
       }
       const token = new Token(apiKey, apiSecret, {
-        identity: user.id, name: user.username || 'Участник', metadata: JSON.stringify({ username: user.username || 'Участник' }), ttl: '5m',
+        identity: user.id, name: user.username || 'Участник', metadata: JSON.stringify({ username: user.username || 'Участник', encryptionEpoch: channel.encryptionEpoch }), ttl: '5m',
       });
       token.addGrant({
         roomJoin: true, room: channel.id,
@@ -57,7 +58,10 @@ export function createMedia(env, dependencies = {}) {
         const updates = await Promise.allSettled((await rooms.listParticipants(room.name)).map(async (participant) => {
           const username = usernames.get(participant.identity);
           if (!username) return;
-          const metadata = JSON.stringify({ username });
+          // Epoch binds a grant to its membership generation; it is not a key.
+          let epoch;
+          try { epoch = JSON.parse(participant.metadata || '{}').encryptionEpoch; } catch { /* Legacy token. */ }
+          const metadata = JSON.stringify({ username, ...(typeof epoch === 'string' ? { encryptionEpoch: epoch } : {}) });
           if (participant.name !== username || participant.metadata !== metadata) {
             await rooms.updateParticipant(room.name, participant.identity, { name: username, metadata });
           }

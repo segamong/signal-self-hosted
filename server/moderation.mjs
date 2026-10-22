@@ -1,11 +1,14 @@
 import { randomUUID } from 'node:crypto';
 
 export function installModerationRoutes(app, context) {
-  const { db, clock, media, HttpError, requireAuth, sessionUser, getChannel, listMembers, broadcastChannels, broadcastInvitations, broadcastPresence, notifyModeration } = context;
+  const { db, clock, media, HttpError, requireAuth, sessionUser, getChannel, listMembers, broadcastChannels, broadcastInvitations, broadcastPresence, notifyModeration, rotateMediaKey, resetMediaRoom } = context;
   const running = new Map();
   let closed = false;
   const listBans = (channelId) => db.prepare('SELECT users.id, users.username FROM channel_bans JOIN users ON users.id = channel_bans.user_id WHERE channel_bans.channel_id = ? ORDER BY users.username COLLATE NOCASE').all(channelId);
-  const requireManager = (channel) => { if (!['owner', 'admin'].includes(channel.role)) throw new HttpError(403, 'Нужны права администратора канала.'); };
+  const requireManager = (channel) => {
+    if (channel.kind === 'direct') throw new HttpError(403, 'В личном разговоре нет администраторов и дополнительных участников.');
+    if (!['owner', 'admin'].includes(channel.role)) throw new HttpError(403, 'Нужны права администратора канала.');
+  };
   function transaction(callback) {
     db.exec('BEGIN IMMEDIATE');
     try { const result = callback(); db.exec('COMMIT'); return result; }
@@ -86,12 +89,14 @@ export function installModerationRoutes(app, context) {
     if (channel.role !== 'owner' && target?.role === 'admin') throw new HttpError(403, 'Администратор может модерировать только участников.');
     if (['promote', 'demote'].includes(action) && channel.role !== 'owner') throw new HttpError(403, 'Назначать и снимать администраторов может владелец канала.');
     if (['promote', 'demote', 'mute', 'unmute'].includes(action) && !targetMembership) throw new HttpError(404, 'Участник канала не найден.');
+    let membershipChanged = false;
     transaction(() => {
       if (action === 'promote' || action === 'demote') db.prepare('UPDATE memberships SET role = ? WHERE channel_id = ? AND user_id = ?').run(action === 'promote' ? 'admin' : 'member', channel.id, userId);
       if (action === 'ban') db.prepare('INSERT OR IGNORE INTO channel_bans (channel_id, user_id, banned_by, target_role, created_at) VALUES (?, ?, ?, ?, ?)').run(channel.id, userId, req.auth.user.id, target?.role || 'member', clock());
       if (action === 'unban') db.prepare('DELETE FROM channel_bans WHERE channel_id = ? AND user_id = ?').run(channel.id, userId);
       if (action === 'kick' || action === 'ban') {
-        db.prepare('DELETE FROM memberships WHERE channel_id = ? AND user_id = ?').run(channel.id, userId);
+        membershipChanged = db.prepare('DELETE FROM memberships WHERE channel_id = ? AND user_id = ?').run(channel.id, userId).changes === 1;
+        if (membershipChanged) rotateMediaKey(channel.id);
         db.prepare("UPDATE channel_invitations SET status = 'expired' WHERE channel_id = ? AND recipient_id = ? AND status = 'pending'").run(channel.id, userId);
         enqueue(channel.id, userId, 'evict');
       }
@@ -104,6 +109,7 @@ export function installModerationRoutes(app, context) {
     broadcastChannels();
     broadcastInvitations(userId);
     broadcastPresence();
+    if (membershipChanged) await resetMediaRoom(channel.id);
     const needsMedia = ['kick', 'ban', 'mute', 'unmute'].includes(action);
     if (needsMedia && !await applyJob(channel.id, userId)) throw new HttpError(503, 'Права сохранены. Медиасервер временно недоступен; действие будет применено автоматически.');
     if (!sessionUser(req)) throw new HttpError(401, 'Сессия завершена. Войдите снова.');
@@ -115,16 +121,21 @@ export function installModerationRoutes(app, context) {
     if (channel.role === 'owner') throw new HttpError(403, 'Владелец может удалить канал; выйти из него нельзя.');
     transaction(() => {
       db.prepare('DELETE FROM memberships WHERE channel_id = ? AND user_id = ?').run(channel.id, req.auth.user.id);
+      rotateMediaKey(channel.id);
+      db.prepare("UPDATE channel_invitations SET status = 'expired' WHERE channel_id = ? AND recipient_id = ? AND status = 'pending'").run(channel.id, req.auth.user.id);
       enqueue(channel.id, req.auth.user.id, 'evict');
     });
     notifyModeration(channel.id, 'leave', req.auth.user.id);
     broadcastChannels();
+    broadcastInvitations(req.auth.user.id);
     broadcastPresence();
+    await resetMediaRoom(channel.id);
     if (!await applyJob(channel.id, req.auth.user.id)) throw new HttpError(503, 'Вы покинули канал. Отключение от медиасервера будет повторено автоматически.');
     res.json({ ok: true });
   });
   app.post('/api/channels/:id/delete', requireAuth, async (req, res) => {
     const channel = getChannel(req.params.id, req.auth.user.id);
+    if (channel.kind === 'direct') throw new HttpError(403, 'Используйте «Закрыть личный разговор» для выхода из него.');
     if (channel.role !== 'owner') throw new HttpError(403, 'Удалить канал может владелец.');
     const recipients = db.prepare('SELECT user_id AS id FROM memberships WHERE channel_id = ? UNION SELECT recipient_id AS id FROM channel_invitations WHERE channel_id = ?').all(channel.id, channel.id).map((row) => row.id);
     transaction(() => {

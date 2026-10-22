@@ -1,0 +1,22 @@
+.call-heading-meta{display:flex;align-items:center;justify-content:flex-end;gap:14px;flex-wrap:wrap;min-width:0}
+.call-encryption{position:relative;color:#67d59b;font-size:11px}
+.call-encryption summary{display:flex;align-items:center;gap:5px;cursor:pointer;list-style:none;line-height:1.5}
+.call-encryption summary::-webkit-details-marker{display:none}
+.call-encryption summary:focus-visible{outline:2px solid #5865f2;outline-offset:5px;border-radius:3px}
+.encryption-popover{position:absolute;right:0;top:calc(100% + 12px);z-index:30;width:min(360px,calc(100vw - 42px));padding:18px;border:1px solid #454650;border-radius:9px;background:#1e1f22;color:#dcdee1;box-shadow:0 12px 32px #0008;font-size:12px;line-height:1.6}
+.encryption-popover strong{display:block;color:#fff;margin-bottom:10px}
+.encryption-popover code{display:block;padding:10px;border-radius:5px;background:#111214;color:#8ce5b6;overflow-wrap:anywhere;font-size:12px;line-height:1.8;user-select:all}
+.encryption-popover p{margin:10px 0}.encryption-popover small{color:#b5bac1}
+.voice-settings{margin:16px 0;padding:16px 0;border-top:1px solid #ffffff12;border-bottom:1px solid #ffffff12}
+.voice-settings h3{margin:0 0 8px}
+.voice-preset-buttons{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}
+.voice-preset-buttons button{padding:9px 12px;border:1px solid #4e5058;border-radius:4px;background:#35373c;color:#f2f3f5;cursor:pointer;font-size:12px}
+.voice-preset-buttons button:hover:not(:disabled){background:#43454b}.voice-preset-buttons button:disabled{opacity:.45;cursor:not-allowed}
+.voice-settings-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin:14px 0}
+.voice-settings-grid label{display:flex;flex-direction:column;gap:8px;font-size:12px;color:#b5bac1}
+.voice-settings-grid label strong{color:#f2f3f5;font-variant-numeric:tabular-nums}
+.voice-settings-grid input[type=range]{width:100%;accent-color:#5865f2}
+.voice-switches{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;font-size:12px}
+.voice-switches label{display:flex!important;align-items:center;gap:8px;line-height:1.5}.voice-switches input{accent-color:#5865f2;flex:0 0 auto}
+.voice-processing-state{font-size:11px;color:#949ba4;line-height:1.6}
+@media(max-width:600px){.call-heading-meta{gap:7px}.call-encryption{font-size:10px}.voice-settings-grid,.voice-switches{grid-template-columns:1fr}.encryption-popover{position:fixed;top:100px;right:16px}}

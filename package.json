@@ -1,6 +1,6 @@
 {
   "name": "signal-self-hosted",
-  "version": "0.3.3",
+  "version": "0.4.0",
   "description": "Сигнал — общение на своём сервере",
   "author": "Signal Community",
   "main": "desktop/main.cjs",
@@ -20,6 +20,7 @@
     "desktop:build": "pnpm build && electron-builder --win --x64 --config electron-builder.yml"
   },
   "dependencies": {
+    "@sapphi-red/web-noise-suppressor": "0.4.1",
     "express": "5.3.0",
     "livekit-client": "2.23.0",
     "livekit-server-sdk": "2.19.1",
@@ -32,10 +33,10 @@
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
     "@vitejs/plugin-react": "5.2.0",
-    "typescript": "5.9.3",
-    "vite": "7.3.7",
     "electron": "44.9.0",
-    "electron-builder": "26.15.3"
+    "electron-builder": "26.15.3",
+    "typescript": "5.9.3",
+    "vite": "7.3.7"
   },
   "packageManager": "pnpm@11.25.0"
 }

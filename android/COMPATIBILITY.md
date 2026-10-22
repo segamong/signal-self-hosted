@@ -1,4 +1,4 @@
-# Android 0.1.1 — совместимость
+# Android 0.1.2 — совместимость
 
 APK: Android 5.0+ (minSdk 21), targetSdk 37, без maxSdk. Включены ARM32 (`armeabi-v7a`), ARM64 (`arm64-v8a`) и `x86_64`. Для переписки нужен WebView Chromium 94+. Android 5.0/5.1 ограничены последним доступным им WebView 95, Android 6 — 106; заводского движка без обновлений недостаточно.
 

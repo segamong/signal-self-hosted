@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
-import { AudioLines, ArrowRight, Bell, Check, Copy, Download, Hash, Headphones, Link2, LogOut, Menu, MessageSquare, Minus, Pin, Plus, Radio, Send, Settings, ShieldCheck, Square, Users, Volume2, X } from 'lucide-react';
+import { AtSign, AudioLines, ArrowRight, Bell, Check, ChevronDown, Copy, Download, Hash, Headphones, Info, Link2, LogOut, Menu, MessageSquare, Minus, Phone, Pin, Plus, Radio, Send, Settings, ShieldCheck, Square, Users, Volume2, X } from 'lucide-react';
 import { api, invitationCode, SERVER_ORIGIN } from './api';
 import { subscribeAndroidServerEvents } from './androidBridge';
 import './styles.css';
@@ -12,18 +12,14 @@ import { MessageContent, type MessageData } from './MessageContent';
 import { PinnedMessages } from './PinnedMessages';
 import AndroidCallStage, { androidCommand, subscribeAndroidCallState } from './AndroidCallStage';
 import { clearCallSession, readCallSession, saveCallSession, DEFAULT_CALL_PREFERENCES, type CallPreferences } from './callSession';
+import { DirectConversation } from './DirectConversation';
+import { channelCapacity, type Channel } from './channelTypes';
 const CallStage = lazy(() => import('./CallStage'));
+const themeReady = window.signalAndroidBridge ? Promise.resolve() : import('./discord.css');
 type User = {
     id: string;
     username: string;
     role: string;
-};
-type Channel = {
-    id: string;
-    name: string;
-    description: string;
-    ownerId: string;
-    role: 'owner' | 'admin' | 'member';
 };
 type Message = MessageData;
 type Config = {
@@ -123,7 +119,10 @@ function App() {
         setMessageRevision(value => value + 1);
         setMessages(old => old.filter(message => message.id !== id));
     }
-    const [modal, setModal] = useState<'invite' | 'channel' | 'join' | 'settings' | 'inbox' | 'channel-settings' | 'profile' | 'pins' | null>(null), [invite, setInvite] = useState(''), [copied, setCopied] = useState(false), [modalBusy, setModalBusy] = useState(false);
+    const [modal, setModal] = useState<'invite' | 'channel' | 'join' | 'settings' | 'inbox' | 'channel-settings' | 'profile' | 'pins' | 'direct' | 'direct-info' | null>(null), [invite, setInvite] = useState(''), [copied, setCopied] = useState(false), [modalBusy, setModalBusy] = useState(false);
+    const [directUsername, setDirectUsername] = useState(''), [confirmDirectLeave, setConfirmDirectLeave] = useState(false);
+    const [directNotice, setDirectNotice] = useState<{ channelId: string; message: string } | null>(null);
+    const leavingDirect = useRef(false);
     const [joinValue, setJoinValue] = useState(() => new URLSearchParams(location.search).get('invite') || ''), [inviteInfo, setInviteInfo] = useState<InviteInfo | null>(null), [joinError, setJoinError] = useState('');
     const [profileUser, setProfileUser] = useState<{
         id: string;
@@ -146,10 +145,17 @@ function App() {
     } | null>(null), scrollNext = useRef(true), requestVersion = useRef(0);
     selectedRef.current = selected;
     const channel = channels.find(c => c.id === selected);
+    const isDirect = channel?.kind === 'direct';
+    const groupChannels = channels.filter(item => item.kind !== 'direct');
+    const directChannels = channels.filter(item => item.kind === 'direct');
+    const channelLabel = (item: Channel) => item.kind === 'direct' ? item.peer?.username || item.name : item.name;
+    const selectedLabel = channel ? channelLabel(channel) : 'Мои каналы';
+    const selectedPrefix = isDirect ? '@' : '#';
+    const webDesktop = !window.signalAndroidBridge;
     const count = (id: string) => rooms.find(r => r.id === id)?.participants.length || 0;
     const updateChannels = (next: Channel[]) => { channelsRevision.current++; setChannelsLoaded(true); setChannels(next); setSelected(old => next.some(c => c.id === old) ? old : next[0]?.id || ''); };
     function mutateChannels(action: (old: Channel[]) => Channel[]) { channelsRevision.current++; setChannels(action); }
-    const canManageChannel = channel?.role === 'owner' || channel?.role === 'admin';
+    const canManageChannel = channel?.kind !== 'direct' && (channel?.role === 'owner' || channel?.role === 'admin');
     function clearCallUi() { callIdRef.current = undefined; clearCallSession(); setCall(null); callPreferences.current = DEFAULT_CALL_PREFERENCES; setInitialCallPreferences(DEFAULT_CALL_PREFERENCES); }
     function stopCall() { androidCommand({type:'leaveCall'}); clearCallUi(); }
     function startCall(next: Channel) {
@@ -289,6 +295,9 @@ function App() {
             setOnline([]);
             setChannelMembers([]);
             setProfileUser(null);
+            setDirectUsername('');
+            setDirectNotice(null);
+            setConfirmDirectLeave(false);
             setRooms([]);
             setInvitations([]);
             setBusyInvitation(null);
@@ -612,6 +621,47 @@ function App() {
         }
     }
     function openJoin() { setJoinValue(''); setInviteInfo(null); setJoinError(''); setModal('join'); }
+    function openDirect(username = '') {
+        if (!user || !webDesktop) return;
+        setDirectUsername(username);
+        setConfirmDirectLeave(false);
+        setModal('direct');
+    }
+    function directCreated(next: Channel, pending: boolean) {
+        if (!user || authUserId.current !== user.id) return;
+        mutateChannels(old => [...new Map([...old, next].map(item => [item.id, item])).values()]);
+        setSelected(next.id);
+        setSidebarOpen(false);
+        setModal(null);
+        setDirectNotice(pending ? { channelId: next.id, message: `Приглашение отправлено @${channelLabel(next)}. Когда собеседник его примет, вы сможете общаться вдвоём.` } : null);
+    }
+    function incomingDirect(invitation: Invitation) {
+        if (!user || authUserId.current !== user.id) return;
+        invitationRevision.current++;
+        setInvitations(old => [...new Map([...old, invitation].map(item => [item.id, item])).values()]);
+        setModal('inbox');
+    }
+    async function leaveDirect() {
+        if (!user || !channel || channel.kind !== 'direct' || leavingDirect.current) return;
+        const accountId = user.id, channelId = channel.id;
+        leavingDirect.current = true;
+        setModalBusy(true);
+        try {
+            await api(`/channels/${encodeURIComponent(channelId)}/leave`, {});
+            if (authUserId.current !== accountId) return;
+            if (callIdRef.current === channelId) stopCall();
+            mutateChannels(old => old.filter(item => item.id !== channelId));
+            setSelected(old => old === channelId ? '' : old);
+            setDirectNotice(null);
+            setConfirmDirectLeave(false);
+            setModal(null);
+        } catch (cause) {
+            if (authUserId.current === accountId) setError((cause as Error).message);
+        } finally {
+            leavingDirect.current = false;
+            if (authUserId.current === accountId) setModalBusy(false);
+        }
+    }
     async function previewInvite(event?: FormEvent) {
         event?.preventDefault();
         setJoinError('');
@@ -730,51 +780,136 @@ function App() {
         return <div className="boot"><Brand /><h2>Сервер пока не отвечает</h2><p>{bootError}</p><button className="primary" onClick={() => location.reload()}>Повторить</button></div>;
     if (!user)
         return <Auth onLogin={setUser} pendingInvite={Boolean(joinValue)}/>;
-    return <div className="app-shell"><nav className="server-rail" aria-label="Сервер"><Brand compact/><span className="rail-divider"/><button className="server-icon selected" title="Ваш сервер" aria-label="Ваш сервер"><Radio size={25}/></button><button className="rail-add" title="Вступить в канал" aria-label="Вступить в канал" onClick={openJoin}><Plus size={23}/></button><span className="rail-caption">ДОМА</span><div className="rail-bottom"><button className="icon-btn" title="Настройки приложения" aria-label="Настройки приложения" onClick={() => setModal('settings')}><Settings size={21}/></button></div></nav>
-    {sidebarOpen && <button className="mobile-shade" aria-label="Закрыть меню" onClick={() => setSidebarOpen(false)}/>}
-    <aside className={`channel-sidebar ${sidebarOpen ? 'mobile-open' : ''}`}><div className="workspace-heading"><div><strong>Свой круг</strong><span>Каналы вашего аккаунта</span></div><button className="icon-btn mobile-close" aria-label="Закрыть меню" onClick={() => setSidebarOpen(false)}><X size={20}/></button></div><div className="sidebar-scroll"><div className="workspace-note"><span className="green-dot"/><span>На одной частоте</span><AudioLines size={14}/></div><div className="section-label">МОИ КАНАЛЫ<button className="icon-btn" aria-label="Создать канал" title="Создать канал" onClick={() => setModal('channel')}><Plus size={16}/></button></div><div className="channels">{channels.map(c => <button key={c.id} className={`channel-button ${selected === c.id ? 'active' : ''}`} onClick={() => { setSelected(c.id); setSidebarOpen(false); }}><Hash size={18}/><span>{c.name}</span>{count(c.id) > 0 && <span className="channel-count">{count(c.id)}</span>}</button>)}</div>{!channels.length && <p className="sidebar-empty">Пока нет каналов. Создайте свой или примите приглашение.</p>}<button className="sidebar-join" onClick={openJoin}><Link2 size={16}/>Вступить по приглашению</button>{channels.length > 0 && <><div className="section-label voice-label">ГОЛОСОВЫЕ КОМНАТЫ<span>10 МЕСТ</span></div><div className="voice-rooms">{channels.map(c => <button key={c.id} className={`voice-channel ${call?.id === c.id ? 'connected' : ''}`} onClick={() => {
-                    if (call && call.id !== c.id) {
-                        setError('Сначала завершите текущий звонок.');
-                        return;
-                    }
-                    setSelected(c.id);
-                    startCall(c);
-                    setSidebarOpen(false);
-                }}><Volume2 size={18}/><span>{c.name}</span>{call?.id === c.id ? <span className="live-dot"/> : <small>{count(c.id)}/10</small>}</button>)}</div></>}<div className="sidebar-card"><span className="mini-orbit"><AudioLines size={23}/></span><h3>Собраться вместе?</h3><p>{canManageChannel ? `Пригласите друзей в #${channel.name}.` : 'Создайте свой канал и пригласите друзей.'}</p><button onClick={canManageChannel ? createInvite : () => setModal('channel')}><Plus size={15}/>{canManageChannel ? 'Пригласить в канал' : 'Создать канал'}</button></div></div>{call && <div className="sidebar-call"><span className="green-dot"/><div><strong>Голосовая комната</strong><span>{call.name}</span></div><button className="icon-btn" title="Завершить звонок" aria-label="Завершить звонок" onClick={stopCall}><X size={17}/></button></div>}<div className="user-panel"><Avatar user={user} small/><div><strong>{user.username}</strong><span><i className="green-dot"/>{socketLive ? 'В сети' : 'Переподключение…'}</span></div><button className="icon-btn" onClick={logout} title="Выйти из аккаунта" aria-label="Выйти из аккаунта"><LogOut size={18}/></button></div></aside>
-    <main className="main-panel"><header className="channel-header"><button className="icon-btn mobile-menu" aria-label="Открыть меню" onClick={() => setSidebarOpen(true)}><Menu size={22}/></button><Hash size={23}/><strong>{channel?.name || 'Мои каналы'}</strong><span className="header-divider"/><span className="channel-description">{channel?.description || 'Ваше личное пространство'}</span><div className="header-actions">{channel && <button className="icon-btn" title="Закреплённые сообщения" aria-label="Закреплённые сообщения" onClick={() => setModal('pins')}><Pin size={19}/></button>}{channel && <button className="icon-btn" title="Управление каналом" aria-label="Управление каналом" onClick={() => setModal('channel-settings')}><Settings size={20}/></button>}<button className="icon-btn invitations-trigger" title="Входящие приглашения" aria-label={`Приглашения: ${invitations.length}`} onClick={() => setModal('inbox')}><Bell size={20}/>{invitations.length > 0 && <span className="invitation-count">{invitations.length}</span>}</button><span className={`connection-chip ${socketLive ? '' : 'offline'}`}><i className="green-dot"/>{socketLive ? 'Подключено' : 'Соединяемся'}</span>{canManageChannel && <button className="icon-btn" title="Пригласить в этот канал" aria-label="Пригласить в этот канал" onClick={createInvite}><Link2 size={20}/></button>}<button className={`icon-btn ${membersOpen ? 'on' : ''}`} aria-label="Показать участников" title="Участники" onClick={() => setMembersOpen(!membersOpen)}><Users size={20}/></button></div></header>
-      <div className="workspace-body"><div className="conversation-column">{call && (window.signalAndroidBridge ? <AndroidCallStage key={call.id} channel={call} onLeave={stopCall}/> : <Suspense fallback={<div className="call-stage call-status">Готовим голосовую комнату…</div>}><CallStage key={call.id} channel={call} user={user} initialPreferences={initialCallPreferences} onPreferencesChange={persistCallPreferences} onServerRemoved={stopCall} onLeave={stopCall} onError={setError}/></Suspense>)}
-      {!channel ? <div className="account-welcome"><span className="account-orbit"><AudioLines size={58}/></span><span className="eyebrow">ПРИВЕТ, {user.username.toLocaleUpperCase('ru-RU')}</span><h1>Ваш круг начинается здесь<span>.</span></h1><p>Аккаунт уже готов. Создайте канал для друзей или вступите в существующий по приглашению.</p><div><button className="primary" onClick={() => setModal('channel')}><Plus size={18}/>Создать канал</button><button className="secondary" onClick={openJoin}><Link2 size={18}/>У меня есть приглашение</button></div><span className="account-note"><ShieldCheck size={16}/>Все ваши каналы сохраняются в аккаунте</span></div> : <><div className="message-history" ref={historyRef} role="log" aria-label={`Сообщения канала ${channel.name}`} aria-live="polite"><div className="welcome"><span className="welcome-symbol"><Hash size={34}/></span><span className="eyebrow">ВАШЕ МЕСТО ДЛЯ ХОРОШИХ РАЗГОВОРОВ</span><h1>Это #{channel.name}<span>.</span></h1><p>{channel.description || 'Здесь начинается общение.'}</p>{!call && <div className="welcome-actions"><button className="primary" onClick={() => startCall(channel)}><Headphones size={17}/>Войти в комнату<ArrowRight size={16}/></button><span>До 10 участников · голос, видео и экран</span></div>}</div>{!config.mediaConfigured && <div className="setup-banner"><ShieldCheck size={18}/><span>Текстовый чат готов. Медиасервер пока недоступен.</span></div>}<div className="date-divider"><span>НАЧАЛО РАЗГОВОРА</span></div>{hasMore && <button className="load-more" disabled={loading} onClick={earlier}>Предыдущие сообщения</button>}{loading && messages.length === 0 && <p className="history-state">Загружаем сообщения…</p>}{!loading && messages.length === 0 && <div className="empty-chat"><MessageSquare size={22}/><div><strong>Пока тихо. Начните разговор.</strong><span>Напишите что-нибудь — остальные увидят это сразу.</span></div></div>}{messages.map((message, index) => { const previous = messages[index - 1], grouped = previous && previous.user.id === message.user.id && new Date(message.createdAt).getTime() - new Date(previous.createdAt).getTime() < 300000; return <article className={`message ${grouped ? 'grouped' : ''}`} key={message.id}>{!grouped ? <Avatar user={message.user}/> : <span className="message-short-time">{new Date(message.createdAt).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}</span>}<div className="message-body">{!grouped && <div className="message-author"><strong>{message.user.username}</strong><time dateTime={message.createdAt}>{new Date(message.createdAt).toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</time></div>}<MessageContent message={message} currentUserId={user.id} canModerate={canManageChannel} onUpdated={updateMessage} onDeleted={deleteMessage} onError={setError}/></div></article>; })}<div ref={bottomRef}/></div><div className="composer-wrap"><form className="composer" onSubmit={send}><span className="composer-hash"><Hash size={20}/></span><textarea aria-label="Сообщение" placeholder={`Написать в #${channel.name}`} value={draft} onChange={e => setDraft(e.target.value)} maxLength={4000} rows={1} onKeyDown={e => {
-                if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
-                    e.preventDefault();
-                    e.currentTarget.form?.requestSubmit();
-                }
-            }}/><button type="submit" className="send-button" title="Отправить" aria-label="Отправить сообщение" disabled={!draft.trim() || sending}><Send size={18}/></button></form><span className="composer-hint"><span><b>Enter</b> — отправить <span className="hint-dot">·</span><b>Shift + Enter</b> — новая строка</span><span>{draft.length > 3500 ? `${draft.length}/4000` : 'Будьте на своей волне'}</span></span></div></>}
-      </div>{membersOpen && <aside className="members-panel"><div className="members-title">УЧАСТНИКИ<span>{channelMembers.length}</span></div>{channelMembers.map(person => <div className="member-row" key={person.id}><span className="member-avatar"><Avatar user={person} small/><i className={`green-dot ${online.some(item => item.id === person.id) ? '' : 'offline'}`}/></span><div><button className="member-profile-name" onClick={() => { setProfileUser(person); setModal('profile'); }}>{person.username}{person.id === user.id && <small>вы</small>}</button><span>{person.role === 'owner' ? 'Владелец' : person.role === 'admin' ? 'Администратор' : online.some(item => item.id === person.id) ? 'В сети' : 'Не в сети'}</span></div></div>)}{!socketLive && <p className="muted small-text">Список обновится после подключения.</p>}<div className="members-footer"><ShieldCheck size={18}/><strong>Свой сервер.<br />Свои правила.</strong><p>Ваше пространство для разговоров без лишнего шума.</p><span>СИГНАЛ / 02</span></div></aside>}</div>
-    </main>{error && <div className="toast" role="alert"><span>{error}</span><button className="icon-btn" aria-label="Закрыть уведомление" onClick={() => setError('')}><X size={18}/></button></div>}
-    {modal && <div className="modal-overlay" onClick={() => setModal(null)}><section ref={modalRef} className={`modal-card modal-${modal}`} role="dialog" aria-modal="true" aria-label={modal === 'invite' ? 'Приглашение в канал' : modal === 'channel' ? 'Создать канал' : modal === 'join' ? 'Вступить в канал' : modal === 'inbox' ? 'Входящие приглашения' : modal === 'channel-settings' ? 'Управление каналом' : modal === 'profile' ? 'Профиль участника' : modal === 'pins' ? 'Закреплённые сообщения' : 'Настройки приложения'} onClick={e => e.stopPropagation()}><button className="icon-btn modal-close" onClick={() => setModal(null)} aria-label="Закрыть"><X size={20}/></button><span className="modal-icon">{modal === 'settings' || modal === 'channel-settings' ? <Settings size={26}/> : modal === 'channel' ? <Hash size={26}/> : modal === 'inbox' ? <Bell size={26}/> : <Link2 size={26}/>}</span>
-      {modal === 'invite' && channel && <><h2>Пригласить в #{channel.name}</h2><ChannelInvitationForm key={channel.id} channelId={channel.id} channelName={channel.name} onError={setError}/><div className="invitation-link-section"><h3>Или пригласите по ссылке</h3><p>Ссылка действует 7 дней и допускает 10 новых вступлений. Получатель сам подтверждает добавление канала.</p>{!invite ? <button className="secondary full" disabled={modalBusy} onClick={generateInvite}>{modalBusy ? 'Создаём ссылку…' : 'Создать ссылку'}<Link2 size={17}/></button> : <><label className="invite-label">ССЫЛКА В КАНАЛ<input readOnly value={invite} onFocus={e => e.target.select()}/></label><button className="secondary full" onClick={copyInvite}>{copied ? <Check size={17}/> : <Copy size={17}/>} {copied ? 'Ссылка скопирована' : 'Скопировать ссылку'}</button></>}</div></>}
-      {modal === 'channel-settings' && channel && <ChannelSettings channel={channel} userId={user.id} onError={setError} onChanged={next => {
-                    if (next)
-                        mutateChannels(old => old.map(item => item.id === next.id ? { ...item, ...next } : item));
-                    else {
-                        const revision = channelsRevision.current;
-                        void api<{ channels: Channel[] }>('/channels').then(data => { if (revision === channelsRevision.current) updateChannels(data.channels); }).catch(e => setError(e.message));
-                    }
-                }} onLeft={() => {
-                    const id = channel.id;
-                    if (call?.id === id)
-                        stopCall();
-                    mutateChannels(old => old.filter(item => item.id !== id));
-                    setSelected(old => old === id ? '' : old);
-                    setModal(null);
-                }}/>}
-      {modal === 'profile' && profileUser && <UserProfile user={profileUser} role={profileUser.role} online={online.some(item => item.id === profileUser.id)} onError={setError}/>}
-      {modal === 'pins' && channel && <><h2>Закреплённые сообщения</h2><PinnedMessages key={channel.id} channelId={channel.id} currentUserId={user.id} canModerate={canManageChannel} liveRevision={messageRevision} deletedMessageIds={deletedMessageIds.current} onUpdated={updateMessage} onDeleted={deleteMessage} onError={setError}/></>}
-      {modal === 'inbox' && <><h2>Входящие приглашения</h2><Inbox invitations={invitations} onRespond={respondInvitation} busyId={busyInvitation}/></>}
-      {modal === 'channel' && <><h2>Ещё одно место для общения</h2><form onSubmit={createChannel}><p>Вы станете владельцем канала и сможете приглашать участников. Внутри — чат, голос, видео и показ экрана.</p><label>Название<input name="name" required maxLength={40} placeholder="Например, Кино на вечер"/></label><label>Описание<input name="description" maxLength={180} placeholder="О чём будем говорить?"/></label><button className="primary full" disabled={modalBusy}>{modalBusy ? 'Создаём…' : 'Создать канал'}<Plus size={17}/></button></form></>}
-      {modal === 'join' && <><h2>Вступить в канал</h2><p>Приглашение добавит канал в ваш аккаунт. Ваши остальные каналы останутся с вами.</p><form onSubmit={previewInvite}><label>Ссылка или код приглашения<input value={joinValue} onChange={e => { setJoinValue(e.target.value); setInviteInfo(null); setJoinError(''); }} placeholder="signal://invite/…" autoComplete="off" maxLength={256} required/></label><button className="secondary full" disabled={modalBusy || !joinValue.trim()}>{modalBusy ? 'Подождите…' : 'Посмотреть канал'}<ArrowRight size={17}/></button></form>{inviteInfo && <div className="invite-preview"><Hash size={24}/><div><strong>{inviteInfo.channel.name}</strong><span>{channels.some(c => c.id === inviteInfo.channel.id) ? 'Вы уже участник' : inviteInfo.valid ? 'Приглашение действительно' : 'Срок или число вступлений исчерпаны'}</span></div></div>}{inviteInfo && (inviteInfo.valid || channels.some(c => c.id === inviteInfo.channel.id)) && <button className="primary full" disabled={modalBusy} onClick={joinChannel}>{channels.some(c => c.id === inviteInfo.channel.id) ? 'Открыть канал' : 'Принять приглашение'}<Check size={17}/></button>}{joinError && <p className="form-error" role="alert">{joinError}</p>}</>}
-      {modal === 'settings' && <><h2>Ваш Сигнал</h2><p>Вы вошли как <strong>@{user.username}</strong>. Каналы и переписка хранятся на вашем сервере.</p>{window.signalDesktop && <div className="desktop-settings"><label><input type="checkbox" checked={desktopSettings.openAtLogin} onChange={e => void saveDesktopSetting('openAtLogin', e.target.checked)}/><span>Запускать вместе с Windows</span></label><label><input type="checkbox" checked={desktopSettings.closeToTray} onChange={e => void saveDesktopSetting('closeToTray', e.target.checked)}/><span>При закрытии оставаться в трее</span></label><p>Для полного выхода используйте меню Сигнала в трее.</p></div>}<DesktopUpdates />{window.signalAndroidBridge && <button className="secondary full" onClick={()=>androidCommand({type:'checkUpdate'})}><Download size={17}/>Проверить обновления Android</button>}<div className="server-address"><ShieldCheck size={17}/><span>Сервер: {SERVER_ORIGIN}</span></div><p className="modal-footnote">Камера, микрофон, устройства и качество трансляции настраиваются в голосовой комнате.</p></>}
-    </section></div>}
-  </div>;
+    return <div className="app-shell">
+      <nav className="server-rail" aria-label="Сервер">
+        <Brand compact/><span className="rail-divider"/>
+        <button className="server-icon selected" title="Ваш сервер" aria-label="Ваш сервер"><Radio size={25}/></button>
+        <button className="rail-add" title="Вступить в канал" aria-label="Вступить в канал" onClick={openJoin}><Plus size={23}/></button>
+        <span className="rail-caption">ДОМА</span>
+        <div className="rail-bottom"><button className="icon-btn" title="Настройки приложения" aria-label="Настройки приложения" onClick={() => setModal('settings')}><Settings size={21}/></button></div>
+      </nav>
+      {sidebarOpen && <button className="mobile-shade" aria-label="Закрыть меню" onClick={() => setSidebarOpen(false)}/>}
+      <aside className={`channel-sidebar ${sidebarOpen ? 'mobile-open' : ''}`}>
+        <div className="workspace-heading"><div><strong>Свой круг</strong><span>Каналы вашего аккаунта</span></div>{webDesktop && <ChevronDown size={17}/>}<button className="icon-btn mobile-close" aria-label="Закрыть меню" onClick={() => setSidebarOpen(false)}><X size={20}/></button></div>
+        <div className="sidebar-scroll">
+          <div className="workspace-note"><span className="green-dot"/><span>На одной частоте</span><AudioLines size={14}/></div>
+          <div className="section-label">ТЕКСТОВЫЕ КАНАЛЫ<button className="icon-btn" aria-label="Создать канал" title="Создать канал" onClick={() => setModal('channel')}><Plus size={16}/></button></div>
+          <div className="channels">{groupChannels.map(item => <button key={item.id} className={`channel-button ${selected === item.id ? 'active' : ''}`} onClick={() => { setSelected(item.id); setSidebarOpen(false); }}><Hash size={18}/><span>{item.name}</span>{count(item.id) > 0 && <span className="channel-count">{count(item.id)}</span>}</button>)}</div>
+          {!groupChannels.length && <p className="sidebar-empty">Создайте канал для друзей или примите приглашение.</p>}
+          <button className="sidebar-join" onClick={openJoin}><Link2 size={16}/>Вступить по приглашению</button>
+          {groupChannels.length > 0 && <>
+            <div className="section-label voice-label">ГОЛОСОВЫЕ КАНАЛЫ<span>10 МЕСТ</span></div>
+            <div className="voice-rooms">{groupChannels.map(item => <button key={item.id} className={`voice-channel ${call?.id === item.id ? 'connected' : ''}`} onClick={() => {
+              if (call && call.id !== item.id) { setError('Сначала завершите текущий звонок.'); return; }
+              setSelected(item.id); startCall(item); setSidebarOpen(false);
+            }}><Volume2 size={18}/><span>{item.name}</span>{call?.id === item.id ? <span className="live-dot"/> : <small>{count(item.id)}/{channelCapacity(item)}</small>}</button>)}</div>
+          </>}
+          {webDesktop && <div className="direct-message-section">
+            <div className="section-label">ЛИЧНЫЕ РАЗГОВОРЫ<button className="icon-btn" aria-label="Начать личный разговор" title="Начать личный разговор" onClick={() => openDirect()}><Plus size={16}/></button></div>
+            {directChannels.map(item => <button key={item.id} className={`direct-channel ${selected === item.id ? 'active' : ''}`} onClick={() => { setSelected(item.id); setSidebarOpen(false); }}>
+              {item.peer ? <Avatar user={item.peer} small/> : <span className="direct-peer-avatar"><AtSign size={16}/></span>}
+              <span>{channelLabel(item)}</span>{call?.id === item.id && <span className="direct-live"><Volume2 size={15}/></span>}
+            </button>)}
+            {!directChannels.length && <button className="direct-empty" onClick={() => openDirect()}><MessageSquare size={17}/><span>Добавить собеседника</span></button>}
+          </div>}
+          <div className="sidebar-card"><span className="mini-orbit"><AudioLines size={23}/></span><h3>Собраться вместе?</h3><p>{canManageChannel && channel ? `Пригласите друзей в #${channel.name}.` : 'Создайте свой канал и пригласите друзей.'}</p><button onClick={canManageChannel ? createInvite : () => setModal('channel')}><Plus size={15}/>{canManageChannel ? 'Пригласить в канал' : 'Создать канал'}</button></div>
+        </div>
+        {call && <div className="sidebar-call"><span className="green-dot"/><div><strong>{call.kind === 'direct' ? 'Личный звонок' : 'Голосовая комната'}</strong><span>{channelLabel(call)}</span></div><button className="icon-btn" title="Завершить звонок" aria-label="Завершить звонок" onClick={stopCall}><Phone size={17}/></button></div>}
+        <div className="user-panel"><Avatar user={user} small/><div><strong>{user.username}</strong><span><i className="green-dot"/>{socketLive ? 'В сети' : 'Переподключение…'}</span></div><button className="icon-btn" onClick={() => setModal('settings')} title="Настройки приложения" aria-label="Настройки приложения"><Settings size={18}/></button><button className="icon-btn" onClick={logout} title="Выйти из аккаунта" aria-label="Выйти из аккаунта"><LogOut size={18}/></button></div>
+      </aside>
+      <main className="main-panel">
+        <header className="channel-header">
+          <button className="icon-btn mobile-menu" aria-label="Открыть меню" onClick={() => setSidebarOpen(true)}><Menu size={22}/></button>
+          {isDirect ? <AtSign size={23}/> : <Hash size={23}/>}<strong>{selectedLabel}</strong>
+          <span className="header-divider"/><span className="channel-description">{isDirect ? 'Личный разговор · только вы вдвоём' : channel?.description || 'Ваше личное пространство'}</span>
+          <div className="header-actions">
+            {isDirect && channel && <button className="icon-btn direct-call-button" title="Начать личный звонок" aria-label="Начать личный звонок" onClick={() => startCall(channel)}><Phone size={21}/></button>}
+            {channel && <button className="icon-btn" title="Закреплённые сообщения" aria-label="Закреплённые сообщения" onClick={() => setModal('pins')}><Pin size={19}/></button>}
+            {channel && <button className="icon-btn" title={isDirect ? 'О личном разговоре' : 'Управление каналом'} aria-label={isDirect ? 'О личном разговоре' : 'Управление каналом'} onClick={() => { setConfirmDirectLeave(false); setModal(isDirect ? 'direct-info' : 'channel-settings'); }}>{isDirect ? <Info size={20}/> : <Settings size={20}/>}</button>}
+            <button className="icon-btn invitations-trigger" title="Входящие приглашения" aria-label={`Приглашения: ${invitations.length}`} onClick={() => setModal('inbox')}><Bell size={20}/>{invitations.length > 0 && <span className="invitation-count">{invitations.length}</span>}</button>
+            <span className={`connection-chip ${socketLive ? '' : 'offline'}`}><i className="green-dot"/>{socketLive ? 'Подключено' : 'Соединяемся'}</span>
+            {canManageChannel && <button className="icon-btn" title="Пригласить в этот канал" aria-label="Пригласить в этот канал" onClick={createInvite}><Link2 size={20}/></button>}
+            <button className={`icon-btn ${membersOpen ? 'on' : ''}`} aria-label="Показать участников" title="Участники" onClick={() => setMembersOpen(!membersOpen)}><Users size={20}/></button>
+          </div>
+        </header>
+        <div className="workspace-body"><div className={`conversation-column${call ? ' has-call' : ''}`}>
+          {call && (window.signalAndroidBridge ? <AndroidCallStage key={call.id} channel={call} onLeave={stopCall}/> : <Suspense fallback={<div className="call-stage call-status">Готовим голосовую комнату…</div>}><CallStage key={call.id} channel={call} user={user} initialPreferences={initialCallPreferences} onPreferencesChange={persistCallPreferences} onServerRemoved={stopCall} onLeave={stopCall} onError={setError}/></Suspense>)}
+          {!channel ? <div className="account-welcome">
+            <span className="account-orbit"><AudioLines size={58}/></span><span className="eyebrow">ПРИВЕТ, {user.username.toLocaleUpperCase('ru-RU')}</span><h1>Здесь начинается общение<span>.</span></h1>
+            <p>{webDesktop ? 'Начните личный разговор с другом или соберите всех в своём канале.' : 'Создайте канал для друзей или вступите в существующий по приглашению.'}</p>
+            <div>{webDesktop && <button className="primary" onClick={() => openDirect()}><MessageSquare size={18}/>Личный разговор</button>}<button className={webDesktop ? 'secondary' : 'primary'} onClick={() => setModal('channel')}><Plus size={18}/>Создать канал</button><button className="secondary" onClick={openJoin}><Link2 size={18}/>Вступить в канал</button></div>
+            <span className="account-note"><ShieldCheck size={16}/>Все ваши каналы сохраняются в аккаунте</span>
+          </div> : <>
+            {directNotice?.channelId === channel.id && channelMembers.length < 2 && <div className="direct-pending-notice" role="status"><MessageSquare size={17}/><span>{directNotice.message}</span><button className="icon-btn" aria-label="Скрыть уведомление" onClick={() => setDirectNotice(null)}><X size={16}/></button></div>}
+            <div className="message-history" ref={historyRef} role="log" aria-label={isDirect ? `Личный разговор с ${selectedLabel}` : `Сообщения канала ${selectedLabel}`} aria-live="polite">
+              <div className={`welcome${isDirect ? ' direct-welcome' : ''}`}>
+                <span className="welcome-symbol">{isDirect ? <AtSign size={34}/> : <Hash size={34}/>}</span>
+                <span className="eyebrow">{isDirect ? 'ВАШ ЛИЧНЫЙ РАЗГОВОР' : 'ВАШЕ МЕСТО ДЛЯ ХОРОШИХ РАЗГОВОРОВ'}</span>
+                <h1>{isDirect ? `@${selectedLabel}` : `Это #${selectedLabel}`}<span>.</span></h1>
+                <p>{isDirect ? `Здесь начинается ваша переписка с @${selectedLabel}. В этом разговоре можете участвовать только вы двое.` : channel.description || 'Здесь начинается общение.'}</p>
+                {!call && <div className="welcome-actions"><button className="primary" onClick={() => startCall(channel)}>{isDirect ? <Phone size={17}/> : <Headphones size={17}/>} {isDirect ? 'Начать звонок' : 'Войти в комнату'}<ArrowRight size={16}/></button><span>{isDirect ? 'Только для двоих' : `До ${channelCapacity(channel)} участников`} · голос, видео и экран</span></div>}
+              </div>
+              {!config.mediaConfigured && <div className="setup-banner"><ShieldCheck size={18}/><span>Текстовый чат готов. Медиасервер пока недоступен.</span></div>}
+              <div className="date-divider"><span>НАЧАЛО РАЗГОВОРА</span></div>
+              {hasMore && <button className="load-more" disabled={loading} onClick={earlier}>Предыдущие сообщения</button>}
+              {loading && messages.length === 0 && <p className="history-state">Загружаем сообщения…</p>}
+              {!loading && messages.length === 0 && <div className="empty-chat"><MessageSquare size={22}/><div><strong>Пока тихо. Начните разговор.</strong><span>Напишите что-нибудь — {isDirect ? 'собеседник увидит' : 'остальные увидят'} это сразу.</span></div></div>}
+              {messages.map((message, index) => {
+                const previous = messages[index - 1], grouped = previous && previous.user.id === message.user.id && new Date(message.createdAt).getTime() - new Date(previous.createdAt).getTime() < 300000;
+                return <article className={`message ${grouped ? 'grouped' : ''}`} key={message.id}>
+                  {!grouped ? <Avatar user={message.user}/> : <span className="message-short-time">{new Date(message.createdAt).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}</span>}
+                  <div className="message-body">{!grouped && <div className="message-author"><strong>{message.user.username}</strong><time dateTime={message.createdAt}>{new Date(message.createdAt).toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</time></div>}
+                    <MessageContent message={message} currentUserId={user.id} canModerate={canManageChannel} onUpdated={updateMessage} onDeleted={deleteMessage} onError={setError}/>
+                  </div>
+                </article>;
+              })}<div ref={bottomRef}/>
+            </div>
+            <div className="composer-wrap"><form className="composer" onSubmit={send}>
+              <span className="composer-hash">{isDirect ? <AtSign size={20}/> : <Plus size={20}/>}</span>
+              <textarea aria-label="Сообщение" placeholder={`Написать ${isDirect ? '' : 'в '}${selectedPrefix}${selectedLabel}`} value={draft} onChange={event => setDraft(event.target.value)} maxLength={4000} rows={1} onKeyDown={event => {
+                if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); }
+              }}/>
+              <button type="submit" className="send-button" title="Отправить" aria-label="Отправить сообщение" disabled={!draft.trim() || sending}><Send size={18}/></button>
+            </form><span className="composer-hint"><span><b>Enter</b> — отправить <span className="hint-dot">·</span><b>Shift + Enter</b> — новая строка</span><span>{draft.length > 3500 ? `${draft.length}/4000` : 'Будьте на своей волне'}</span></span></div>
+          </>}
+        </div>
+        {membersOpen && <aside className="members-panel"><div className="members-title">УЧАСТНИКИ<span>{channelMembers.length}</span></div>
+          {channelMembers.map(person => <div className="member-row" key={person.id}>
+            <span className="member-avatar"><Avatar user={person} small/><i className={`green-dot ${online.some(item => item.id === person.id) ? '' : 'offline'}`}/></span>
+            <div><button className="member-profile-name" onClick={() => { setProfileUser(person); setModal('profile'); }}>{person.username}{person.id === user.id && <small>вы</small>}</button><span>{!isDirect && person.role === 'owner' ? 'Владелец' : !isDirect && person.role === 'admin' ? 'Администратор' : online.some(item => item.id === person.id) ? 'В сети' : 'Не в сети'}</span></div>
+          </div>)}
+          {!socketLive && <p className="muted small-text">Список обновится после подключения.</p>}
+          <div className="members-footer"><ShieldCheck size={18}/><strong>Свой сервер.<br/>Свои правила.</strong><p>Ваше пространство для разговоров без лишнего шума.</p><span>СИГНАЛ / 02</span></div>
+        </aside>}</div>
+      </main>
+      {error && <div className="toast" role="alert"><span>{error}</span><button className="icon-btn" aria-label="Закрыть уведомление" onClick={() => setError('')}><X size={18}/></button></div>}
+      {modal && <div className="modal-overlay" onClick={() => { if (!modalBusy) setModal(null); }}><section ref={modalRef} className={`modal-card modal-${modal}`} role="dialog" aria-modal="true" aria-label={modal === 'invite' ? 'Приглашение в канал' : modal === 'channel' ? 'Создать канал' : modal === 'join' ? 'Вступить в канал' : modal === 'inbox' ? 'Входящие приглашения' : modal === 'channel-settings' ? 'Управление каналом' : modal === 'profile' ? 'Профиль участника' : modal === 'pins' ? 'Закреплённые сообщения' : modal === 'direct' ? 'Личный разговор' : modal === 'direct-info' ? 'О личном разговоре' : 'Настройки приложения'} onClick={event => event.stopPropagation()}>
+        <button className="icon-btn modal-close" onClick={() => setModal(null)} aria-label="Закрыть"><X size={20}/></button>
+        <span className="modal-icon">{modal === 'settings' || modal === 'channel-settings' ? <Settings size={26}/> : modal === 'channel' ? <Hash size={26}/> : modal === 'inbox' ? <Bell size={26}/> : modal === 'direct' || modal === 'direct-info' ? <MessageSquare size={26}/> : <Link2 size={26}/>}</span>
+        {modal === 'direct' && webDesktop && <DirectConversation key={`${user.id}:${directUsername}`} initialUsername={directUsername} onCreated={directCreated} onIncoming={incomingDirect}/>}
+        {modal === 'direct-info' && isDirect && channel && <div className="direct-info">
+          <h2>Разговор с @{selectedLabel}</h2><p>Личная переписка и голосовой канал для двоих. Вход другим пользователям закрыт; добавить третьего участника или пригласить по ссылке нельзя.</p>
+          <div className="direct-info-members"><Users size={18}/><span>Только @{user.username} и @{selectedLabel}</span><strong>2 места</strong></div>
+          {!confirmDirectLeave ? <button className="channel-action destructive full" onClick={() => setConfirmDirectLeave(true)}><LogOut size={16}/>Покинуть разговор</button> : <div className="channel-confirm" role="alertdialog" aria-labelledby="direct-leave-title"><strong id="direct-leave-title">Покинуть личный разговор?</strong><p>Вы выйдете из звонка и потеряете доступ к этой переписке. Чтобы вернуться, потребуется новое приглашение собеседника.</p><div><button className="channel-action" disabled={modalBusy} onClick={() => setConfirmDirectLeave(false)}>Отмена</button><button className="channel-action destructive" disabled={modalBusy} onClick={() => void leaveDirect()}>{modalBusy ? 'Выходим…' : 'Покинуть'}</button></div></div>}
+        </div>}
+        {modal === 'invite' && channel && !isDirect && <><h2>Пригласить в #{channel.name}</h2><ChannelInvitationForm key={channel.id} channelId={channel.id} channelName={channel.name} onError={setError}/><div className="invitation-link-section"><h3>Или пригласите по ссылке</h3><p>Ссылка действует 7 дней и допускает 10 новых вступлений. Получатель сам подтверждает добавление канала.</p>{!invite ? <button className="secondary full" disabled={modalBusy} onClick={generateInvite}>{modalBusy ? 'Создаём ссылку…' : 'Создать ссылку'}<Link2 size={17}/></button> : <><label className="invite-label">ССЫЛКА В КАНАЛ<input readOnly value={invite} onFocus={event => event.target.select()}/></label><button className="secondary full" onClick={copyInvite}>{copied ? <Check size={17}/> : <Copy size={17}/>} {copied ? 'Ссылка скопирована' : 'Скопировать ссылку'}</button></>}</div></>}
+        {modal === 'channel-settings' && channel && !isDirect && <ChannelSettings channel={channel} userId={user.id} onError={setError} onChanged={next => {
+          if (authUserId.current !== user.id) return;
+          if (next) mutateChannels(old => old.map(item => item.id === next.id ? { ...item, ...next } : item));
+          else { const revision = channelsRevision.current; void api<{ channels: Channel[] }>('/channels').then(data => { if (authUserId.current === user.id && revision === channelsRevision.current) updateChannels(data.channels); }).catch(cause => { if (authUserId.current === user.id) setError(cause.message); }); }
+        }} onLeft={() => {
+          if (authUserId.current !== user.id) return;
+          const id = channel.id;
+          if (call?.id === id) stopCall();
+          mutateChannels(old => old.filter(item => item.id !== id)); setSelected(old => old === id ? '' : old); setModal(null);
+        }}/>}
+        {modal === 'profile' && profileUser && <UserProfile user={profileUser} role={isDirect ? undefined : profileUser.role} online={online.some(item => item.id === profileUser.id)} onError={setError} onDirect={webDesktop && profileUser.id !== user.id ? () => openDirect(profileUser.username) : undefined}/>}
+        {modal === 'pins' && channel && <><h2>Закреплённые сообщения</h2><PinnedMessages key={channel.id} channelId={channel.id} currentUserId={user.id} canModerate={canManageChannel} liveRevision={messageRevision} deletedMessageIds={deletedMessageIds.current} onUpdated={updateMessage} onDeleted={deleteMessage} onError={setError}/></>}
+        {modal === 'inbox' && <><h2>Входящие приглашения</h2><Inbox invitations={invitations} onRespond={respondInvitation} busyId={busyInvitation}/></>}
+        {modal === 'channel' && <><h2>Ещё одно место для общения</h2><form onSubmit={createChannel}><p>Вы станете владельцем канала и сможете приглашать участников. Внутри — чат, голос, видео и показ экрана.</p><label>Название<input name="name" required maxLength={40} placeholder="Например, Кино на вечер"/></label><label>Описание<input name="description" maxLength={180} placeholder="О чём будем говорить?"/></label><button className="primary full" disabled={modalBusy}>{modalBusy ? 'Создаём…' : 'Создать канал'}<Plus size={17}/></button></form></>}
+        {modal === 'join' && <><h2>Вступить в канал</h2><p>Приглашение добавит канал в ваш аккаунт. Ваши остальные каналы останутся с вами.</p><form onSubmit={previewInvite}><label>Ссылка или код приглашения<input value={joinValue} onChange={event => { setJoinValue(event.target.value); setInviteInfo(null); setJoinError(''); }} placeholder="signal://invite/…" autoComplete="off" maxLength={256} required/></label><button className="secondary full" disabled={modalBusy || !joinValue.trim()}>{modalBusy ? 'Подождите…' : 'Посмотреть канал'}<ArrowRight size={17}/></button></form>{inviteInfo && <div className="invite-preview"><Hash size={24}/><div><strong>{inviteInfo.channel.name}</strong><span>{channels.some(item => item.id === inviteInfo.channel.id) ? 'Вы уже участник' : inviteInfo.valid ? 'Приглашение действительно' : 'Срок или число вступлений исчерпаны'}</span></div></div>}{inviteInfo && (inviteInfo.valid || channels.some(item => item.id === inviteInfo.channel.id)) && <button className="primary full" disabled={modalBusy} onClick={joinChannel}>{channels.some(item => item.id === inviteInfo.channel.id) ? 'Открыть канал' : 'Принять приглашение'}<Check size={17}/></button>}{joinError && <p className="form-error" role="alert">{joinError}</p>}</>}
+        {modal === 'settings' && <><h2>Ваш Сигнал</h2><p>Вы вошли как <strong>@{user.username}</strong>. Каналы и переписка хранятся на вашем сервере.</p>{window.signalDesktop && <div className="desktop-settings"><label><input type="checkbox" checked={desktopSettings.openAtLogin} onChange={event => void saveDesktopSetting('openAtLogin', event.target.checked)}/><span>Запускать вместе с Windows</span></label><label><input type="checkbox" checked={desktopSettings.closeToTray} onChange={event => void saveDesktopSetting('closeToTray', event.target.checked)}/><span>При закрытии оставаться в трее</span></label><p>Для полного выхода используйте меню Сигнала в трее.</p></div>}<DesktopUpdates/>{window.signalAndroidBridge && <button className="secondary full" onClick={() => androidCommand({type:'checkUpdate'})}><Download size={17}/>Проверить обновления Android</button>}<div className="server-address"><ShieldCheck size={17}/><span>Сервер: {SERVER_ORIGIN}</span></div><p className="modal-footnote">Камера, микрофон, устройства и качество трансляции настраиваются в голосовой комнате.</p></>}
+      </section></div>}
+    </div>;
 }
-createRoot(document.getElementById('root')!).render(<DesktopFrame><App /></DesktopFrame>);
+void themeReady.then(() => createRoot(document.getElementById('root')!).render(<DesktopFrame><App/></DesktopFrame>));

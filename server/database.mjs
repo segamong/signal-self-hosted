@@ -1,6 +1,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
+import { randomBytes } from 'node:crypto';
 
 export function openDatabase(dataDir) {
   mkdirSync(dataDir, { recursive: true, mode: 0o700 });
@@ -163,6 +164,39 @@ export function migrateChannelModeration(db, now = Date.now()) {
         );
       `);
       db.prepare('INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)').run('channel-moderation-v1', now);
+    }
+    db.exec('COMMIT');
+  } catch (error) { db.exec('ROLLBACK'); throw error; }
+}
+
+// Private conversations keep an immutable account pair. Their membership cannot
+// be expanded through a link, a channel invitation or an administrator action.
+export function migratePrivateCalls(db, now = Date.now()) {
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    if (!db.prepare('SELECT 1 FROM schema_migrations WHERE version = ?').get('private-calls-e2ee-v1')) {
+      if (!db.prepare('PRAGMA table_info(channels)').all().some((column) => column.name === 'kind')) {
+        db.exec("ALTER TABLE channels ADD COLUMN kind TEXT NOT NULL DEFAULT 'channel' CHECK (kind IN ('channel', 'direct'))");
+      }
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS direct_conversations (
+          channel_id TEXT PRIMARY KEY REFERENCES channels(id) ON DELETE CASCADE,
+          first_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          second_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          CHECK (first_user_id < second_user_id),
+          UNIQUE (first_user_id, second_user_id)
+        );
+        CREATE TABLE IF NOT EXISTS channel_media_keys (
+          channel_id TEXT PRIMARY KEY REFERENCES channels(id) ON DELETE CASCADE,
+          key TEXT NOT NULL,
+          epoch INTEGER NOT NULL DEFAULT 1 CHECK (epoch > 0),
+          reset_pending INTEGER NOT NULL DEFAULT 0 CHECK (reset_pending IN (0, 1))
+        );
+      `);
+      // Existing plaintext calls must end before an encrypted participant joins.
+      const seed = db.prepare('INSERT OR IGNORE INTO channel_media_keys (channel_id, key, epoch, reset_pending) VALUES (?, ?, 1, 1)');
+      for (const channel of db.prepare('SELECT id FROM channels').all()) seed.run(channel.id, randomBytes(32).toString('base64url'));
+      db.prepare('INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)').run('private-calls-e2ee-v1', now);
     }
     db.exec('COMMIT');
   } catch (error) { db.exec('ROLLBACK'); throw error; }

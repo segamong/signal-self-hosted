@@ -11,10 +11,13 @@ import java.io.IOException
 import java.net.URL
 import kotlin.coroutines.resume
 
-data class JoinCredentials(val url: String, val token: String)
+class JoinCredentials(val url: String, val token: String, val encryptionKey: String, val encryptionEpoch: String) {
+    override fun toString(): String = "JoinCredentials([redacted])"
+}
 data class SignalUser(val id: String, val username: String)
 data class SignalApiResponse(val status: Int, val data: JSONObject)
 class SignalApiException(val status: Int, message: String) : IOException(message)
+class SignalEncryptionException(message: String) : IOException(message)
 
 object SignalApi {
     const val SERVER_ORIGIN = "https://13.143.172.92:9443"
@@ -42,14 +45,21 @@ object SignalApi {
 
     suspend fun joinChannel(channelId: String): JoinCredentials {
         require(validChannelId(channelId)) { "Некорректный канал." }
-        val response = request("/api/channels/${Uri.encode(channelId)}/join", JSONObject())
+        val response = request("/api/channels/${Uri.encode(channelId)}/join", JSONObject().put("encryptionVersion", 1))
         val endpoint = response.optString("url")
         val uri = Uri.parse(endpoint)
         val token = response.optString("token")
         if (uri.scheme != "wss" || uri.host != "13.143.172.92" || uri.port != 9443 || uri.userInfo != null || uri.query != null || uri.fragment != null || (uri.path ?: "").let { it.isNotEmpty() && it != "/" } || token.length !in 20..20_000) {
             throw IOException("Сервер вернул неподходящие параметры звонка.")
         }
-        return JoinCredentials(endpoint, token)
+        val encryption = response.optJSONObject("encryption")
+        val key = encryption?.opt("key") as? String
+        val epoch = encryption?.opt("epoch") as? String
+        if (encryption == null || encryption.opt("required") != true || encryption.optString("algorithm") != "AES-GCM" || encryption.optString("keyDerivation") != "PBKDF2" || key == null || !Regex("[A-Za-z0-9_-]{43}").matches(key) || epoch == null || !Regex("[1-9][0-9]{0,15}").matches(epoch)) {
+            throw SignalEncryptionException("Сервер не подтвердил шифрование звонка. Обновите приложение и сервер.")
+        }
+        // The base64url value is a UTF-8 passphrase, not decoded raw key bytes.
+        return JoinCredentials(endpoint, token, key, epoch)
     }
 
     suspend fun channelMembers(channelId: String): Map<String, String> {

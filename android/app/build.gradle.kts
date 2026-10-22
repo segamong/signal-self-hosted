@@ -14,8 +14,8 @@ android {
         applicationId = "cloud.signal.android"
         minSdk = 21
         targetSdk = 37
-        versionCode = 2
-        versionName = "0.1.1"
+        versionCode = 3
+        versionName = "0.1.2"
         ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64") }
     }
     if (canSignRelease) {
@@ -76,6 +76,9 @@ dependencies {
     implementation("androidx.webkit:webkit:1.14.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
     implementation("io.livekit:livekit-android:2.29.0")
+    // LiveKit exposes Encryption.Type publicly but publishes its EnumLite
+    // superclass at runtime scope; keep its exact runtime version on compile.
+    implementation("com.google.protobuf:protobuf-javalite:3.25.9")
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
 }
 
