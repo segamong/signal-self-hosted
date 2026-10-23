@@ -255,6 +255,8 @@ label { color: #b5bac1; font-size: 12px; font-weight: 700; gap: 8px; }
 .call-media-layout.has-screen-share { display: grid; grid-template-columns: minmax(0, 1fr) 196px; gap: 12px; align-items: stretch; }
 .participant-grid { grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 8px; }
 .participant-tile { height: auto; min-height: 130px; aspect-ratio: 16 / 9; border: 2px solid transparent; border-radius: 8px; background: #2b2d31; }
+/* A single wide grid column must not turn into a screen-height camera card. */
+.participant-grid:not(.thumbnails) > .participant-tile:not(:fullscreen) { max-height: min(42vh, 420px); max-height: min(42dvh, 420px); }
 .participant-tile.speaking { border-color: #23a55a; box-shadow: none; }
 .participant-avatar { width: 64px; height: 64px; border-radius: 50%; background: #5865f2; color: white; font-size: 24px; font-weight: 600; }
 .participant-caption { bottom: 7px; left: 7px; right: 7px; color: #f2f3f5; font-size: 12px; text-shadow: none; gap: 5px; min-height: 22px; }
