@@ -1,0 +1,67 @@
+/* Browser and Windows community navigation. Loaded after the shared skin. */
+.workspace-rail-list { display:flex; flex-direction:column; flex:0 1 auto; min-height:0; overflow-y:auto; overflow-x:visible; gap:8px; width:72px; align-items:center; padding:3px 0; scrollbar-width:none; }
+.workspace-rail-list .server-icon { flex-shrink:0; font-size:16px; font-weight:600; letter-spacing:-.3px; }
+.home-rail-button { flex-shrink:0; position:relative; }
+.rail-friend-count { position:absolute; right:-3px; bottom:-2px; padding:1px 5px; min-width:19px; border:3px solid var(--signal-deep,#1e1f22); border-radius:10px; background:#da373c; color:#fff; font-size:10px; }
+.server-rail .rail-add,.server-rail .rail-join { flex-shrink:0; }
+.home-friends-link { width:100%; display:flex; align-items:center; gap:14px; min-height:43px; padding:9px 12px; color:var(--signal-interactive,#b5bac1); border-radius:4px; text-align:left; font-size:15px; margin:0 0 17px; }
+.home-friends-link.active,.home-friends-link:hover { background:var(--signal-selected,#404249); color:var(--signal-heading,#f2f3f5); }
+.home-friends-link b { margin-left:auto; padding:1px 6px; background:var(--signal-danger,#fa777c); color:var(--signal-deep,#1e1f22); border-radius:10px; font-size:12px; }
+.voice-member-preview { display:flex; gap:8px; align-items:center; padding:4px 8px 4px 35px; color:var(--signal-muted,#949ba4); font-size:12px; overflow:hidden; text-overflow:ellipsis; }
+.voice-member-preview>span { display:grid; place-items:center; width:23px; height:23px; flex:0 0 23px; border-radius:50%; background:var(--signal-accent,#5865f2); color:#fff; font-size:10px; }
+.workspace-voice-group { margin-bottom:2px; }
+.user-panel.with-personal-audio { gap:4px; padding:8px 6px; }
+.user-panel .user-identity { display:flex; flex-direction:column; gap:3px; flex:1; min-width:0; color:inherit; text-align:left; padding:3px 2px; border-radius:3px; }
+.user-panel .user-identity:hover { background:var(--signal-hover,#35373c); }
+.user-panel .user-identity strong { display:block; width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.user-panel .user-identity>span { display:flex; align-items:center; gap:4px; font-size:9px; white-space:nowrap; color:var(--signal-muted,#949ba4); }
+.user-panel.with-personal-audio>.icon-btn { width:27px; flex:0 0 27px; }
+.user-panel.with-personal-audio>.avatar { width:30px; height:30px; flex:0 0 30px; font-size:12px; }
+.friends-home { display:flex; flex:1; min-height:0; flex-direction:column; background:var(--signal-bg,#313338); color:var(--signal-text,#dbdee1); }
+.friends-tabs { display:flex; flex-wrap:wrap; gap:8px; padding:12px 18px; align-items:center; min-height:55px; flex-shrink:0; border-bottom:1px solid var(--signal-border,#45474e); }
+.friends-tab-title { display:flex; align-items:center; gap:10px; font-weight:600; color:var(--signal-heading,#f2f3f5); }
+.friends-tabs>i { width:1px; height:24px; background:var(--signal-border,#45474e); margin:0 8px; }
+.friends-tabs>button { padding:5px 8px; font-size:14px; border-radius:4px; color:var(--signal-interactive,#b5bac1); display:flex; gap:7px; align-items:center; }
+.friends-tabs>button:hover,.friends-tabs>button.active { color:var(--signal-heading,#f2f3f5); background:var(--signal-selected,#404249); }
+.friends-tabs b { border-radius:10px; background:#da373c; color:#fff; font-size:11px; padding:1px 6px; }
+.friends-tabs>button.friends-add-tab { background:var(--signal-accent,#5865f2); color:#fff; }
+.friends-tabs>button.friends-add-tab.active { color:var(--signal-accent,#5865f2); background:transparent; }
+.friends-body { min-height:0; flex:1; overflow-y:auto; padding:20px 30px; scrollbar-width:thin; scrollbar-color:var(--signal-deep,#1e1f22) transparent; }
+.friend-search { display:flex; flex-direction:row; align-items:center; gap:10px; background:var(--signal-input,#1e1f22); border-radius:4px; padding:0 10px; color:var(--signal-muted,#949ba4); margin-bottom:20px; }
+.friend-search>input { background:transparent; border:0; box-shadow:none; flex:1; min-width:0; font-size:14px; color:var(--signal-text,#dbdee1); }
+.friends-list-heading { text-transform:uppercase; font-size:12px; color:var(--signal-muted,#949ba4); letter-spacing:.3px; margin:0 0 14px; font-weight:600; }
+.friends-group-title { font-size:12px; text-transform:uppercase; color:var(--signal-muted,#949ba4); margin:22px 0 10px; }
+.friend-row { display:flex; flex-wrap:wrap; align-items:center; gap:12px; min-height:68px; padding:10px 8px; border-top:1px solid var(--signal-border,#45474e); position:relative; }
+.friend-row:hover { background:var(--signal-hover,#35373c); border-radius:7px; }
+.friend-avatar { display:grid; place-items:center; flex:0 0 36px; width:36px; height:36px; border-radius:50%; background:var(--signal-accent,#5865f2); color:#fff; font-size:18px; position:relative; }
+.friend-avatar>i { width:11px; height:11px; border-radius:50%; position:absolute; right:-1px; bottom:-1px; border:2px solid var(--signal-bg,#313338); background:var(--signal-muted,#949ba4); }
+.friend-avatar.online>i { background:var(--signal-success,#3bbd77); }
+.friend-row-name { display:flex; flex-direction:column; gap:4px; min-width:80px; flex:1; color:inherit; text-align:left; }
+.friend-row-name>strong { font-size:15px; color:var(--signal-heading,#f2f3f5); overflow-wrap:anywhere; }
+.friend-row-name>small { font-size:12px; color:var(--signal-muted,#949ba4); }
+.friend-action { display:grid; place-items:center; flex:0 0 34px; width:34px; height:34px; border-radius:50%; background:var(--signal-panel,#2b2d31); color:var(--signal-interactive,#b5bac1); }
+.friend-action:hover { color:var(--signal-heading,#f2f3f5); background:var(--signal-deep,#1e1f22); }
+.friend-action.accept:hover { color:var(--signal-success,#3bbd77); }.friend-action.danger:hover { color:var(--signal-danger,#fa777c); }
+.friend-remove-confirm { display:flex; align-items:center; gap:8px; width:100%; padding:10px 0 0 48px; font-size:12px; color:var(--signal-muted,#949ba4); }
+.friend-remove-confirm>button { color:var(--signal-heading,#f2f3f5); background:var(--signal-panel,#2b2d31); border-radius:3px; padding:6px 9px; }.friend-remove-confirm>button:first-of-type { color:var(--signal-danger,#fa777c); }
+.friends-empty { display:flex; align-items:center; flex-direction:column; justify-content:center; gap:14px; padding:50px 15px; min-height:280px; text-align:center; color:var(--signal-muted,#949ba4); }
+.friends-empty>svg { color:var(--signal-accent,#5865f2); opacity:.8; }
+.friends-empty h2 { color:var(--signal-heading,#f2f3f5); font-size:20px; margin:0; }
+.friends-empty p { font-size:14px; max-width:430px; line-height:1.6; margin:0 0 6px; }
+.friends-add-form { max-width:850px; }.friends-add-form h2 { font-size:17px; text-transform:uppercase; color:var(--signal-heading,#f2f3f5); margin:0 0 12px; }
+.friends-add-form p { color:var(--signal-muted,#949ba4); font-size:14px; line-height:1.6; margin:0 0 20px; }
+.friends-add-form form>label { display:block; margin-bottom:8px; text-transform:uppercase; }
+.friends-add-form form>div { background:var(--signal-input,#1e1f22); display:flex; align-items:center; gap:9px; padding:8px 10px 8px 14px; border:1px solid var(--signal-border,#45474e); border-radius:8px; color:var(--signal-muted,#949ba4); }
+.friends-add-form input { min-width:0; flex:1; background:transparent; border:0; color:var(--signal-text,#dbdee1); padding:8px 0; box-shadow:none; }
+.friends-add-form form>div:focus-within { border-color:var(--signal-focus,#00a8fc); }.friends-add-form .primary { flex-shrink:0; }
+.friends-add-form p.friends-success { display:flex; align-items:center; gap:8px; margin-top:15px; color:var(--signal-success,#3bbd77); }
+.channel-type-picker { margin:20px 0; border:0; padding:0; display:flex; flex-direction:column; gap:9px; }
+.channel-type-picker legend { padding:0; font-size:12px; color:var(--signal-muted,#949ba4); text-transform:uppercase; margin-bottom:9px; }
+.channel-type-picker label { display:flex; flex-direction:row; align-items:center; gap:12px; background:var(--signal-panel,#2b2d31); padding:13px; border-radius:4px; border:1px solid transparent; margin:0; cursor:pointer; }
+.channel-type-picker label.active { background:var(--signal-selected,#404249); border-color:var(--signal-accent,#5865f2); }.channel-type-picker input { margin:0; width:16px; height:16px; }.channel-type-picker span { display:flex; gap:5px; flex-direction:column; }.channel-type-picker strong { font-size:14px; color:var(--signal-heading,#f2f3f5); }.channel-type-picker small { font-size:12px; color:var(--signal-muted,#949ba4); font-weight:400; }
+.profile-friend-button { margin-top:12px; }
+.direct-call-notification { position:fixed; z-index:120; top:74px; right:24px; width:320px; max-width:calc(100vw - 30px); padding:25px; border-radius:12px; border:1px solid var(--signal-border,#45474e); background:var(--signal-panel,#2b2d31); box-shadow:0 14px 50px #0008; display:flex; flex-direction:column; align-items:center; gap:9px; animation:community-pop-in 160ms ease-out; }
+.direct-call-notification h2 { color:var(--signal-heading,#f2f3f5); font-size:20px; margin:7px 0 0; overflow-wrap:anywhere; }.direct-call-notification p { font-size:14px; color:var(--signal-muted,#949ba4); margin:0 0 16px; }.direct-call-notification>div { display:flex; gap:10px; width:100%; }.direct-call-notification button { flex:1; display:flex; align-items:center; justify-content:center; gap:7px; padding:11px 9px; border-radius:5px; font-size:13px; color:#fff; }.direct-call-notification button:disabled { opacity:.45; }.ring-decline { background:#c9383e; }.ring-accept { background:#248046; }.ring-avatar { width:68px; height:68px; border-radius:50%; display:grid; place-items:center; background:var(--signal-accent,#5865f2); color:#fff; font-size:30px; }.direct-call-notification>small { color:var(--signal-muted,#949ba4); font-size:11px; text-align:center; line-height:1.5; }
+@keyframes community-pop-in { from { opacity:0; transform:translateY(-8px); } to { opacity:1; transform:translateY(0); } }
+@media(max-width:800px) { .friends-tabs { gap:6px; padding:10px 12px; }.friends-tab-title { display:none; }.friends-tabs>i { display:none; }.friends-tabs>button { font-size:12px; }.friends-body { padding:18px 14px; }.friends-add-form form>div { flex-wrap:wrap; }.friends-add-form input { width:calc(100% - 40px); }.friends-add-form .primary { width:100%; }.friend-row { gap:8px; }.direct-call-notification { top:65px; right:15px; }.friend-remove-confirm { padding-left:0; flex-wrap:wrap; } }
+@media(prefers-reduced-motion:reduce) { .direct-call-notification { animation:none; } }

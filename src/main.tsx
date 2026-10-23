@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
-import { AtSign, AudioLines, ArrowRight, Bell, Check, ChevronDown, Copy, Download, Hash, Headphones, Info, Link2, LogOut, Menu, MessageSquare, Minus, Phone, Pin, Plus, Radio, Send, Settings, ShieldCheck, Square, Users, Volume2, X } from 'lucide-react';
+import { AtSign, AudioLines, ArrowRight, Bell, Check, ChevronDown, Copy, Download, Hash, Headphones, Info, Link2, LogOut, Menu, MessageSquare, Minus, Phone, PhoneOff, Pin, Plus, Radio, Send, Settings, ShieldCheck, Square, UserPlus, Users, Volume2, X } from 'lucide-react';
 import { api, invitationCode, SERVER_ORIGIN } from './api';
 import { subscribeAndroidServerEvents } from './androidBridge';
 import './styles.css';
@@ -14,8 +14,12 @@ import AndroidCallStage, { androidCommand, subscribeAndroidCallState } from './A
 import { clearCallSession, readCallSession, saveCallSession, DEFAULT_CALL_PREFERENCES, type CallPreferences } from './callSession';
 import { DirectConversation } from './DirectConversation';
 import { channelCapacity, type Channel } from './channelTypes';
+import {FriendsHome,EMPTY_FRIENDS,type Friend,type FriendsState,type DirectCall} from './FriendsHome';
+import {ThemeMenu} from './ThemeMenu';
+import {PersonalAudioControls} from './PersonalAudioControls';
 const CallStage = lazy(() => import('./CallStage'));
-const themeReady = window.signalAndroidBridge ? Promise.resolve() : import('./discord.css');
+const themeReady = window.signalAndroidBridge ? Promise.resolve() : import('./discord.css').then(()=>import('./community-ui.css'));
+type Workspace = {id:string;name:string;description:string;ownerId:string;role:'owner'|'admin'|'member'};
 type User = {
     id: string;
     username: string;
@@ -86,6 +90,11 @@ function App() {
     const [user, setUser] = useState<User | null>(null), [booting, setBooting] = useState(true), [bootError, setBootError] = useState('');
     const [config, setConfig] = useState<Config>({ name: 'Сигнал', maxParticipants: 10, mediaConfigured: false });
     const [channels, setChannels] = useState<Channel[]>([]), [selected, setSelected] = useState('');
+    const [workspaces,setWorkspaces]=useState<Workspace[]>([]),[workspaceId,setWorkspaceId]=useState('');
+    const [friends,setFriends]=useState<FriendsState>(EMPTY_FRIENDS),[friendBusy,setFriendBusy]=useState<string|null>(null);
+    const [directCalls,setDirectCalls]=useState<DirectCall[]>([]),[ringBusy,setRingBusy]=useState(false);
+    const friendMutation=useRef(false),ringMutation=useRef(false),handledRings=useRef(new Set<string>()),authorizedRings=useRef(new Set<string>()),pendingCallPeers=useRef(new Set<string>()),knownCalls=useRef(new Map<string,DirectCall>()),connectedRing=useRef<string|null>(null),socialRevision=useRef(0);
+    const [newChannelType,setNewChannelType]=useState<'text'|'voice'>('text');
     const [messages, setMessages] = useState<Message[]>([]), [hasMore, setHasMore] = useState(false), [loading, setLoading] = useState(false);
     const [online, setOnline] = useState<User[]>([]), [socketLive, setSocketLive] = useState(false), [rooms, setRooms] = useState<RoomInfo[]>([]);
     const [call, setCall] = useState<Channel | null>(null), [membersOpen, setMembersOpen] = useState(() => window.matchMedia('(min-width: 1100px)').matches), [sidebarOpen, setSidebarOpen] = useState(false);
@@ -119,7 +128,7 @@ function App() {
         setMessageRevision(value => value + 1);
         setMessages(old => old.filter(message => message.id !== id));
     }
-    const [modal, setModal] = useState<'invite' | 'channel' | 'join' | 'settings' | 'inbox' | 'channel-settings' | 'profile' | 'pins' | 'direct' | 'direct-info' | null>(null), [invite, setInvite] = useState(''), [copied, setCopied] = useState(false), [modalBusy, setModalBusy] = useState(false);
+    const [modal, setModal] = useState<'invite' | 'channel' | 'workspace' | 'join' | 'settings' | 'inbox' | 'channel-settings' | 'profile' | 'pins' | 'direct' | 'direct-info' | null>(null), [invite, setInvite] = useState(''), [copied, setCopied] = useState(false), [modalBusy, setModalBusy] = useState(false);
     const [directUsername, setDirectUsername] = useState(''), [confirmDirectLeave, setConfirmDirectLeave] = useState(false);
     const [directNotice, setDirectNotice] = useState<{ channelId: string; message: string } | null>(null);
     const leavingDirect = useRef(false);
@@ -152,20 +161,29 @@ function App() {
     const selectedLabel = channel ? channelLabel(channel) : 'Мои каналы';
     const selectedPrefix = isDirect ? '@' : '#';
     const webDesktop = !window.signalAndroidBridge;
+    const workspace=workspaces.find(item=>item.id===workspaceId);
+    const isHome=webDesktop&&!selected&&!workspaceId;
+    const visibleChannels=webDesktop?groupChannels.filter(item=>item.workspaceId===workspaceId):groupChannels;
+    const textChannels=visibleChannels.filter(item=>!webDesktop||item.channelType!=='voice');
+    const voiceChannels=visibleChannels.filter(item=>!webDesktop||item.channelType==='voice');
+    const canManageWorkspace=workspace?.role==='owner'||workspace?.role==='admin';
+    const ringingCalls=directCalls.filter(item=>item.status==='pending');
+    const ringingCall=ringingCalls.find(item=>item.recipient.id===user?.id)||ringingCalls[0];
+    useEffect(()=>{if(call?.kind==='direct'){const accepted=directCalls.find(item=>item.status==='accepted'&&item.channelId===call.id);if(accepted)connectedRing.current=accepted.id;}},[directCalls,call]);
     const count = (id: string) => rooms.find(r => r.id === id)?.participants.length || 0;
-    const updateChannels = (next: Channel[]) => { channelsRevision.current++; setChannelsLoaded(true); setChannels(next); setSelected(old => next.some(c => c.id === old) ? old : next[0]?.id || ''); };
+    const updateChannels = (next: Channel[]) => { channelsRevision.current++; setChannelsLoaded(true); setChannels(next); setSelected(old => next.some(c => c.id === old) ? old : window.signalAndroidBridge ? next[0]?.id || '' : ''); };
     function mutateChannels(action: (old: Channel[]) => Channel[]) { channelsRevision.current++; setChannels(action); }
     const canManageChannel = channel?.kind !== 'direct' && (channel?.role === 'owner' || channel?.role === 'admin');
     function clearCallUi() { callIdRef.current = undefined; clearCallSession(); setCall(null); callPreferences.current = DEFAULT_CALL_PREFERENCES; setInitialCallPreferences(DEFAULT_CALL_PREFERENCES); }
-    function stopCall() { androidCommand({type:'leaveCall'}); clearCallUi(); }
+    function stopCall() { const ringId=connectedRing.current;connectedRing.current=null;if(ringId)void api(`/direct-calls/${encodeURIComponent(ringId)}/respond`,{action:'end'}).catch(()=>{}); androidCommand({type:'leaveCall'}); clearCallUi(); }
     function startCall(next: Channel) {
         if (!user)
             return;
-        if (call && call.id !== next.id) {
+        if (callIdRef.current && callIdRef.current !== next.id) {
             setError('Сначала завершите текущий звонок.');
             return;
         }
-        if (call?.id === next.id) {
+        if (callIdRef.current === next.id) {
             androidCommand({type:'openCall',channelId:next.id,channelName:next.name});
             return;
         }
@@ -175,6 +193,76 @@ function App() {
         saveCallSession(user.id, next.id, callPreferences.current);
         setCall(next);
         androidCommand({type:'openCall',channelId:next.id,channelName:next.name});
+    }
+    function selectChannel(next:Channel){setSelected(next.id);setWorkspaceId(next.kind==='direct'?'':next.workspaceId||'');setSidebarOpen(false);}
+    function goHome(){setSelected('');setWorkspaceId('');setSidebarOpen(false);}
+    function openWorkspace(next:Workspace){setWorkspaceId(next.id);setSelected(channels.find(item=>item.workspaceId===next.id&&item.channelType==='text')?.id||'');setSidebarOpen(false);}
+    function openChannelCreation(type:'text'|'voice'){setNewChannelType(type);setModal('channel');}
+    useEffect(()=>{if(channel)setWorkspaceId(channel.kind==='direct'?'':channel.workspaceId||'');},[selected,channel?.workspaceId,channel?.kind]);
+    async function refreshCommunity(accountId:string){
+        const revision=++socialRevision.current;
+        const results=await Promise.all([api<{workspaces:Workspace[]}>('/workspaces'),api<FriendsState>('/friends'),api<{calls:DirectCall[]}>('/direct-calls')]);
+        if(authUserId.current!==accountId||revision!==socialRevision.current)return;
+        setWorkspaces(results[0].workspaces);setFriends(results[1]);setDirectCalls(results[2].calls.map(rememberCall).filter(item=>['pending','accepted'].includes(item.status)));
+    }
+    useEffect(()=>{
+        if(!user||!webDesktop)return;
+        const accountId=user.id;
+        void refreshCommunity(accountId).catch(cause=>{if(authUserId.current===accountId)setError(cause.message);});
+        const timer=setInterval(()=>void refreshCommunity(accountId).catch(()=>{}),20000);
+        return()=>{clearInterval(timer);socialRevision.current++;};
+    },[user,webDesktop]);
+    async function friendAction(id:string,path:string,body:unknown):Promise<boolean>{
+        if(!user||friendMutation.current)return false;
+        const accountId=user.id;friendMutation.current=true;setFriendBusy(id);socialRevision.current++;
+        try{const result=await api<{requiresAcceptance?:boolean}>(path,body);if(authUserId.current!==accountId)return false;await refreshCommunity(accountId);if(result?.requiresAcceptance){setError('Этот пользователь уже прислал запрос. Откройте вкладку «Ожидание», чтобы принять его.');return false;}return true;}
+        catch(cause){if(authUserId.current===accountId)setError((cause as Error).message);return false;}
+        finally{friendMutation.current=false;if(authUserId.current===accountId)setFriendBusy(null);}
+    }
+    async function openFriendChat(friend:Pick<Friend,'id'|'username'>){
+        if(!user||friendMutation.current)return;
+        const accountId=user.id;friendMutation.current=true;setFriendBusy(friend.id);
+        try{const result=await api<{channel:Channel|null;invitation:Invitation|null;requiresAcceptance?:boolean}>('/direct-channels',{username:friend.username});
+            if(authUserId.current!==accountId)return;
+            if(result.channel)directCreated(result.channel,Boolean(result.invitation));else if(result.invitation)incomingDirect(result.invitation);
+        }catch(cause){if(authUserId.current===accountId)setError((cause as Error).message);}
+        finally{friendMutation.current=false;if(authUserId.current===accountId)setFriendBusy(null);}
+    }
+    function rememberCall(next:DirectCall){
+        const previous=knownCalls.current.get(next.id);
+        if(previous&&((previous.status!=='pending'&&next.status==='pending')||(!['pending','accepted'].includes(previous.status)&&next.status==='accepted')))return previous;
+        knownCalls.current.set(next.id,next);return next;
+    }
+    function receiveDirectCall(incoming:DirectCall,nextChannel?:Channel){
+        const next=rememberCall(incoming);
+        setDirectCalls(old=>[...old.filter(item=>item.id!==next.id),next].filter(item=>['pending','accepted'].includes(item.status)));
+        const locallyRequested=authorizedRings.current.has(next.id)||(next.caller.id===authUserId.current&&pendingCallPeers.current.has(next.recipient.id));
+        if(next.status==='accepted'&&locallyRequested&&!handledRings.current.has(next.id)&&nextChannel){
+            handledRings.current.add(next.id);authorizedRings.current.delete(next.id);
+            if(callIdRef.current&&callIdRef.current!==next.channelId){setError('Звонок принят, но у вас уже открыт другой разговор.');return;}
+            connectedRing.current=next.id;mutateChannels(old=>[...new Map([...old,nextChannel].map(item=>[item.id,item])).values()]);selectChannel(nextChannel);startCall(nextChannel);
+        }
+        if(['declined','cancelled','expired','ended'].includes(next.status)){
+            authorizedRings.current.delete(next.id);
+            if(connectedRing.current===next.id){connectedRing.current=null;stopCall();}
+            if(next.caller.id===authUserId.current&&next.status==='declined')setError(`@${next.recipient.username} отклонил звонок.`);
+        }
+    }
+    async function callFriend(friend:Pick<Friend,'id'|'username'>){
+        if(!user||ringMutation.current)return;
+        if(callIdRef.current){setError('Сначала завершите текущий звонок.');return;}
+        const accountId=user.id;ringMutation.current=true;setRingBusy(true);pendingCallPeers.current.add(friend.id);
+        try{const result=await api<{call:DirectCall;channel:Channel}>('/direct-calls',{userId:friend.id});if(authUserId.current!==accountId)return;authorizedRings.current.add(result.call.id);mutateChannels(old=>[...new Map([...old,result.channel].map(item=>[item.id,item])).values()]);receiveDirectCall(result.call,result.channel);}
+        catch(cause){if(authUserId.current===accountId)setError((cause as Error).message);}
+        finally{pendingCallPeers.current.delete(friend.id);ringMutation.current=false;if(authUserId.current===accountId)setRingBusy(false);}
+    }
+    async function respondCall(next:DirectCall,action:'accept'|'decline'|'cancel'){
+        if(!user||ringMutation.current)return;
+        if(action==='accept'&&callIdRef.current&&callIdRef.current!==next.channelId){setError('Сначала завершите текущий звонок.');return;}
+        const accountId=user.id;ringMutation.current=true;setRingBusy(true);if(action==='accept')authorizedRings.current.add(next.id);
+        try{const result=await api<{call:DirectCall;channel?:Channel}>(`/direct-calls/${encodeURIComponent(next.id)}/respond`,{action});if(authUserId.current===accountId)receiveDirectCall(result.call,result.channel);}
+        catch(cause){authorizedRings.current.delete(next.id);if(authUserId.current===accountId)setError((cause as Error).message);}
+        finally{ringMutation.current=false;if(authUserId.current===accountId)setRingBusy(false);}
     }
     function persistCallPreferences(preferences: CallPreferences) { if (!user || !call || callIdRef.current !== call.id || authUserId.current !== user.id)
         return; callPreferences.current = preferences; saveCallSession(user.id, call.id, preferences); }
@@ -195,7 +283,8 @@ function App() {
         const saved = readCallSession(user.id);
         if (!saved)
             return;
-        const next = channels.find(item => item.id === saved.channelId);
+        const previous = channels.find(item => item.id === saved.channelId);
+        const next = previous?.kind !== 'direct' && previous?.channelType === 'text' && previous.workspaceId ? channels.find(item=>item.workspaceId===previous.workspaceId&&item.channelType==='voice') : previous;
         if (!next) {
             clearCallSession();
             return;
@@ -289,6 +378,7 @@ function App() {
             restoredCallUser.current = null;
             setChannels([]);
             setSelected('');
+            setWorkspaceId('');setWorkspaces([]);setFriends(EMPTY_FRIENDS);setFriendBusy(null);setDirectCalls([]);setRingBusy(false);authorizedRings.current.clear();pendingCallPeers.current.clear();knownCalls.current.clear();handledRings.current.clear();connectedRing.current=null;socialRevision.current++;
             setMessages([]);
             messageOverrides.current.clear();
             deletedMessageIds.current.clear();
@@ -407,10 +497,16 @@ function App() {
                 invitationRevision.current++;
                 setInvitations(data.invitations);
             }
-            if (data.type === 'presence')
+            if (data.type === 'presence') {
                 setOnline(data.online);
+                if(Array.isArray(data.online))setFriends(old=>({...old,friends:old.friends.map(friend=>({...friend,online:data.online.some((person:{id:string})=>person.id===friend.id)}))}));
+            }
             if (data.type === 'channels')
                 updateChannels(data.channels);
+            if (data.type === 'workspaces') {socialRevision.current++;setWorkspaces(data.workspaces);}
+            if (data.type === 'friends') {socialRevision.current++;setFriends({friends:data.friends,incoming:data.incoming,outgoing:data.outgoing});}
+            if (data.type === 'direct-calls') {socialRevision.current++;setDirectCalls(data.calls.map(rememberCall).filter((item:DirectCall)=>['pending','accepted'].includes(item.status)));}
+            if (data.type === 'direct-call') {socialRevision.current++;receiveDirectCall(data.call,data.channel);}
             if (data.type === 'message-updated') updateMessage(data.message);
             if (data.type === 'message-deleted') deleteMessage(data.messageId);
             if (data.type === 'message' && data.message.channelId === selectedRef.current) {
@@ -603,22 +699,32 @@ function App() {
     }
     async function createChannel(event: FormEvent<HTMLFormElement>) {
         event.preventDefault();
+        if(!user||modalBusy)return;
+        const accountId=user.id;
         const data = Object.fromEntries(new FormData(event.currentTarget));
         setModalBusy(true);
         try {
             const result = await api<{
                 channel: Channel;
-            }>('/channels', data);
+            }>(webDesktop&&workspaceId?`/workspaces/${encodeURIComponent(workspaceId)}/channels`:'/channels',webDesktop&&workspaceId?{...data,type:newChannelType}:data);
+            if(authUserId.current!==accountId)return;
             mutateChannels(old => [...new Map([...old, result.channel].map(c => [c.id, c])).values()]);
             setSelected(result.channel.id);
             setModal(null);
         }
         catch (e) {
-            setError((e as Error).message);
+            if(authUserId.current===accountId)setError((e as Error).message);
         }
         finally {
-            setModalBusy(false);
+            if(authUserId.current===accountId)setModalBusy(false);
         }
+    }
+    async function createWorkspace(event:FormEvent<HTMLFormElement>){
+        event.preventDefault();if(!user||modalBusy)return;
+        const accountId=user.id,data=Object.fromEntries(new FormData(event.currentTarget));setModalBusy(true);
+        try{const result=await api<{workspace:Workspace;channels:Channel[]}>('/workspaces',data);if(authUserId.current!==accountId)return;socialRevision.current++;setWorkspaces(old=>[...new Map([...old,result.workspace].map(item=>[item.id,item])).values()]);mutateChannels(old=>[...new Map([...old,...result.channels].map(item=>[item.id,item])).values()]);setWorkspaceId(result.workspace.id);setSelected(result.channels.find(item=>item.channelType==='text')?.id||'');setModal(null);setSidebarOpen(false);}
+        catch(cause){if(authUserId.current===accountId)setError((cause as Error).message);}
+        finally{if(authUserId.current===accountId)setModalBusy(false);}
     }
     function openJoin() { setJoinValue(''); setInviteInfo(null); setJoinError(''); setModal('join'); }
     function openDirect(username = '') {
@@ -751,8 +857,11 @@ function App() {
     }
     async function logout() {
         try {
-            await api('/logout', {});
+            const activeRing=connectedRing.current;connectedRing.current=null;
+            if(activeRing)await api(`/direct-calls/${encodeURIComponent(activeRing)}/respond`,{action:'end'}).catch(()=>{});
+            await Promise.allSettled(directCalls.filter(item=>item.status==='pending').map(item=>api(`/direct-calls/${encodeURIComponent(item.id)}/respond`,{action:item.caller.id===user?.id?'cancel':'decline'})));
             stopCall();
+            await api('/logout', {});
             setUser(null);
             setChannels([]);
             setSelected('');
@@ -782,62 +891,66 @@ function App() {
         return <Auth onLogin={setUser} pendingInvite={Boolean(joinValue)}/>;
     return <div className="app-shell">
       <nav className="server-rail" aria-label="Сервер">
-        <Brand compact/><span className="rail-divider"/>
-        <button className="server-icon selected" title="Ваш сервер" aria-label="Ваш сервер"><Radio size={25}/></button>
-        <button className="rail-add" title="Вступить в канал" aria-label="Вступить в канал" onClick={openJoin}><Plus size={23}/></button>
+        {webDesktop?<button className={`server-icon home-rail-button ${!workspaceId?'selected':''}`} title="Главная · друзья" aria-label="Главная · друзья" onClick={goHome}><AudioLines size={25}/>{friends.incoming.length>0&&<span className="rail-friend-count">{friends.incoming.length}</span>}</button>:<Brand compact/>}<span className="rail-divider"/>
+        {webDesktop?<div className="workspace-rail-list">{workspaces.map(item=><button key={item.id} className={`server-icon ${workspaceId===item.id?'selected':''}`} title={item.name} aria-label={`Сервер ${item.name}`} onClick={()=>openWorkspace(item)}>{initials(item.name)}</button>)}</div>:<button className="server-icon selected" title="Ваш сервер" aria-label="Ваш сервер"><Radio size={25}/></button>}
+        <button className="rail-add" title={webDesktop?'Создать сервер':'Вступить в канал'} aria-label={webDesktop?'Создать сервер':'Вступить в канал'} onClick={webDesktop?()=>setModal('workspace'):openJoin}><Plus size={23}/></button>
+        {webDesktop&&<button className="server-icon rail-join" title="Вступить по приглашению" aria-label="Вступить по приглашению" onClick={openJoin}><Link2 size={22}/></button>}
         <span className="rail-caption">ДОМА</span>
-        <div className="rail-bottom"><button className="icon-btn" title="Настройки приложения" aria-label="Настройки приложения" onClick={() => setModal('settings')}><Settings size={21}/></button></div>
+        <div className="rail-bottom">{webDesktop?<ThemeMenu/>:<button className="icon-btn" title="Настройки приложения" aria-label="Настройки приложения" onClick={() => setModal('settings')}><Settings size={21}/></button>}</div>
       </nav>
       {sidebarOpen && <button className="mobile-shade" aria-label="Закрыть меню" onClick={() => setSidebarOpen(false)}/>}
       <aside className={`channel-sidebar ${sidebarOpen ? 'mobile-open' : ''}`}>
-        <div className="workspace-heading"><div><strong>Свой круг</strong><span>Каналы вашего аккаунта</span></div>{webDesktop && <ChevronDown size={17}/>}<button className="icon-btn mobile-close" aria-label="Закрыть меню" onClick={() => setSidebarOpen(false)}><X size={20}/></button></div>
+        <div className="workspace-heading"><div><strong>{webDesktop?(workspace?.name||'Личные сообщения'):'Свой круг'}</strong><span>Каналы вашего аккаунта</span></div>{webDesktop && <ChevronDown size={17}/>}<button className="icon-btn mobile-close" aria-label="Закрыть меню" onClick={() => setSidebarOpen(false)}><X size={20}/></button></div>
         <div className="sidebar-scroll">
-          <div className="workspace-note"><span className="green-dot"/><span>На одной частоте</span><AudioLines size={14}/></div>
-          <div className="section-label">ТЕКСТОВЫЕ КАНАЛЫ<button className="icon-btn" aria-label="Создать канал" title="Создать канал" onClick={() => setModal('channel')}><Plus size={16}/></button></div>
-          <div className="channels">{groupChannels.map(item => <button key={item.id} className={`channel-button ${selected === item.id ? 'active' : ''}`} onClick={() => { setSelected(item.id); setSidebarOpen(false); }}><Hash size={18}/><span>{item.name}</span>{count(item.id) > 0 && <span className="channel-count">{count(item.id)}</span>}</button>)}</div>
-          {!groupChannels.length && <p className="sidebar-empty">Создайте канал для друзей или примите приглашение.</p>}
+          {webDesktop&&!workspaceId&&<button className={`home-friends-link ${isHome?'active':''}`} onClick={goHome}><Users size={22}/><span>Друзья</span>{friends.incoming.length>0&&<b>{friends.incoming.length}</b>}</button>}
+          {(!webDesktop||workspaceId)&&<>
+          <div className="workspace-note"><span className="green-dot"/><span>{workspace?.description||'На одной частоте'}</span><AudioLines size={14}/></div>
+          <div className="section-label">ТЕКСТОВЫЕ КАНАЛЫ{(!webDesktop||canManageWorkspace)&&<button className="icon-btn" aria-label="Создать текстовый канал" title="Создать текстовый канал" onClick={() => openChannelCreation('text')}><Plus size={16}/></button>}</div>
+          <div className="channels">{textChannels.map(item => <button key={item.id} className={`channel-button ${selected === item.id ? 'active' : ''}`} onClick={() => selectChannel(item)}><Hash size={18}/><span>{item.name}</span></button>)}</div>
+          {!textChannels.length && <p className="sidebar-empty">Текстовых каналов пока нет.</p>}
           <button className="sidebar-join" onClick={openJoin}><Link2 size={16}/>Вступить по приглашению</button>
-          {groupChannels.length > 0 && <>
-            <div className="section-label voice-label">ГОЛОСОВЫЕ КАНАЛЫ<span>10 МЕСТ</span></div>
-            <div className="voice-rooms">{groupChannels.map(item => <button key={item.id} className={`voice-channel ${call?.id === item.id ? 'connected' : ''}`} onClick={() => {
+          {visibleChannels.length > 0 && <>
+            <div className="section-label voice-label">ГОЛОСОВЫЕ КАНАЛЫ{webDesktop&&canManageWorkspace?<button className="icon-btn" aria-label="Создать голосовой канал" title="Создать голосовой канал" onClick={()=>openChannelCreation('voice')}><Plus size={16}/></button>:<span>10 МЕСТ</span>}</div>
+            <div className="voice-rooms">{voiceChannels.map(item => <div className="workspace-voice-group" key={item.id}><button className={`voice-channel ${call?.id === item.id ? 'connected' : ''}`} onClick={() => {
               if (call && call.id !== item.id) { setError('Сначала завершите текущий звонок.'); return; }
-              setSelected(item.id); startCall(item); setSidebarOpen(false);
-            }}><Volume2 size={18}/><span>{item.name}</span>{call?.id === item.id ? <span className="live-dot"/> : <small>{count(item.id)}/{channelCapacity(item)}</small>}</button>)}</div>
+              selectChannel(item); startCall(item);
+            }}><Volume2 size={18}/><span>{item.name}</span>{call?.id === item.id ? <span className="live-dot"/> : <small>{count(item.id)}/{channelCapacity(item)}</small>}</button>{webDesktop&&rooms.find(room=>room.id===item.id)?.participants.map(person=><div className="voice-member-preview" key={person.id}><span>{(person.displayName||'?').slice(0,1).toUpperCase()}</span>{person.displayName}</div>)}</div>)}</div>
           </>}
-          {webDesktop && <div className="direct-message-section">
+          </>}
+          {webDesktop&&!workspaceId && <div className="direct-message-section">
             <div className="section-label">ЛИЧНЫЕ РАЗГОВОРЫ<button className="icon-btn" aria-label="Начать личный разговор" title="Начать личный разговор" onClick={() => openDirect()}><Plus size={16}/></button></div>
-            {directChannels.map(item => <button key={item.id} className={`direct-channel ${selected === item.id ? 'active' : ''}`} onClick={() => { setSelected(item.id); setSidebarOpen(false); }}>
+            {directChannels.map(item => <button key={item.id} className={`direct-channel ${selected === item.id ? 'active' : ''}`} onClick={() => selectChannel(item)}>
               {item.peer ? <Avatar user={item.peer} small/> : <span className="direct-peer-avatar"><AtSign size={16}/></span>}
               <span>{channelLabel(item)}</span>{call?.id === item.id && <span className="direct-live"><Volume2 size={15}/></span>}
             </button>)}
             {!directChannels.length && <button className="direct-empty" onClick={() => openDirect()}><MessageSquare size={17}/><span>Добавить собеседника</span></button>}
           </div>}
-          <div className="sidebar-card"><span className="mini-orbit"><AudioLines size={23}/></span><h3>Собраться вместе?</h3><p>{canManageChannel && channel ? `Пригласите друзей в #${channel.name}.` : 'Создайте свой канал и пригласите друзей.'}</p><button onClick={canManageChannel ? createInvite : () => setModal('channel')}><Plus size={15}/>{canManageChannel ? 'Пригласить в канал' : 'Создать канал'}</button></div>
+          {(!webDesktop||workspaceId)&&<div className="sidebar-card"><span className="mini-orbit"><AudioLines size={23}/></span><h3>Собраться вместе?</h3><p>{canManageChannel && channel ? `Пригласите друзей в #${channel.name}.` : 'Общайтесь в текстовых и голосовых каналах.'}</p>{canManageChannel&&<button onClick={createInvite}><Plus size={15}/>Пригласить в канал</button>}</div>}
         </div>
         {call && <div className="sidebar-call"><span className="green-dot"/><div><strong>{call.kind === 'direct' ? 'Личный звонок' : 'Голосовая комната'}</strong><span>{channelLabel(call)}</span></div><button className="icon-btn" title="Завершить звонок" aria-label="Завершить звонок" onClick={stopCall}><Phone size={17}/></button></div>}
-        <div className="user-panel"><Avatar user={user} small/><div><strong>{user.username}</strong><span><i className="green-dot"/>{socketLive ? 'В сети' : 'Переподключение…'}</span></div><button className="icon-btn" onClick={() => setModal('settings')} title="Настройки приложения" aria-label="Настройки приложения"><Settings size={18}/></button><button className="icon-btn" onClick={logout} title="Выйти из аккаунта" aria-label="Выйти из аккаунта"><LogOut size={18}/></button></div>
+        <div className={`user-panel${webDesktop?' with-personal-audio':''}`}><Avatar user={user} small/><button className="user-identity" onClick={()=>setModal('settings')} title="Профиль и настройки приложения"><strong>{user.username}</strong><span><i className="green-dot"/>{socketLive ? 'В сети' : 'Переподключение…'}</span></button>{webDesktop?<PersonalAudioControls/>:<button className="icon-btn" onClick={() => setModal('settings')} title="Настройки приложения" aria-label="Настройки приложения"><Settings size={18}/></button>}<button className="icon-btn" onClick={logout} title="Выйти из аккаунта" aria-label="Выйти из аккаунта"><LogOut size={18}/></button></div>
       </aside>
       <main className="main-panel">
         <header className="channel-header">
           <button className="icon-btn mobile-menu" aria-label="Открыть меню" onClick={() => setSidebarOpen(true)}><Menu size={22}/></button>
-          {isDirect ? <AtSign size={23}/> : <Hash size={23}/>}<strong>{selectedLabel}</strong>
-          <span className="header-divider"/><span className="channel-description">{isDirect ? 'Личный разговор · только вы вдвоём' : channel?.description || 'Ваше личное пространство'}</span>
+          {isHome?<Users size={23}/>:isDirect ? <AtSign size={23}/> : channel?.channelType==='voice'?<Volume2 size={23}/>:<Hash size={23}/>}<strong>{isHome?'Главная':channel?selectedLabel:workspace?.name||selectedLabel}</strong>
+          <span className="header-divider"/><span className="channel-description">{isHome?'Ваши друзья и личные разговоры':isDirect ? 'Личный разговор · только вы вдвоём' : channel?.description || workspace?.description || 'Ваше личное пространство'}</span>
           <div className="header-actions">
-            {isDirect && channel && <button className="icon-btn direct-call-button" title="Начать личный звонок" aria-label="Начать личный звонок" onClick={() => startCall(channel)}><Phone size={21}/></button>}
+            {isDirect && channel && <button className="icon-btn direct-call-button" title="Начать личный звонок" aria-label="Начать личный звонок" disabled={ringBusy} onClick={() => channel.peer&&friends.friends.some(item=>item.id===channel.peer!.id)?void callFriend(channel.peer):startCall(channel)}><Phone size={21}/></button>}
             {channel && <button className="icon-btn" title="Закреплённые сообщения" aria-label="Закреплённые сообщения" onClick={() => setModal('pins')}><Pin size={19}/></button>}
             {channel && <button className="icon-btn" title={isDirect ? 'О личном разговоре' : 'Управление каналом'} aria-label={isDirect ? 'О личном разговоре' : 'Управление каналом'} onClick={() => { setConfirmDirectLeave(false); setModal(isDirect ? 'direct-info' : 'channel-settings'); }}>{isDirect ? <Info size={20}/> : <Settings size={20}/>}</button>}
             <button className="icon-btn invitations-trigger" title="Входящие приглашения" aria-label={`Приглашения: ${invitations.length}`} onClick={() => setModal('inbox')}><Bell size={20}/>{invitations.length > 0 && <span className="invitation-count">{invitations.length}</span>}</button>
             <span className={`connection-chip ${socketLive ? '' : 'offline'}`}><i className="green-dot"/>{socketLive ? 'Подключено' : 'Соединяемся'}</span>
-            {canManageChannel && <button className="icon-btn" title="Пригласить в этот канал" aria-label="Пригласить в этот канал" onClick={createInvite}><Link2 size={20}/></button>}
-            <button className={`icon-btn ${membersOpen ? 'on' : ''}`} aria-label="Показать участников" title="Участники" onClick={() => setMembersOpen(!membersOpen)}><Users size={20}/></button>
+            {canManageChannel && <button className="icon-btn" title={webDesktop?'Пригласить на сервер':'Пригласить в этот канал'} aria-label={webDesktop?'Пригласить на сервер':'Пригласить в этот канал'} onClick={createInvite}><Link2 size={20}/></button>}
+            {channel&&<button className={`icon-btn ${membersOpen ? 'on' : ''}`} aria-label="Показать участников" title="Участники" onClick={() => setMembersOpen(!membersOpen)}><Users size={20}/></button>}
           </div>
         </header>
         <div className="workspace-body"><div className={`conversation-column${call ? ' has-call' : ''}`}>
           {call && (window.signalAndroidBridge ? <AndroidCallStage key={call.id} channel={call} onLeave={stopCall}/> : <Suspense fallback={<div className="call-stage call-status">Готовим голосовую комнату…</div>}><CallStage key={call.id} channel={call} user={user} initialPreferences={initialCallPreferences} onPreferencesChange={persistCallPreferences} onServerRemoved={stopCall} onLeave={stopCall} onError={setError}/></Suspense>)}
-          {!channel ? <div className="account-welcome">
+          {isHome?<FriendsHome state={friends} busy={friendBusy|| (ringBusy?'call':null)} onAdd={username=>friendAction('add','/friend-requests',{username:username.trim().replace(/^@/,'').toLowerCase()})} onRespond={(id,action)=>void friendAction(id,`/friend-requests/${encodeURIComponent(id)}/respond`,{action})} onRemove={id=>void friendAction(id,`/friends/${encodeURIComponent(id)}/remove`,{})} onChat={friend=>void openFriendChat(friend)} onCall={friend=>void callFriend(friend)}/>:!channel ? <div className="account-welcome">
             <span className="account-orbit"><AudioLines size={58}/></span><span className="eyebrow">ПРИВЕТ, {user.username.toLocaleUpperCase('ru-RU')}</span><h1>Здесь начинается общение<span>.</span></h1>
-            <p>{webDesktop ? 'Начните личный разговор с другом или соберите всех в своём канале.' : 'Создайте канал для друзей или вступите в существующий по приглашению.'}</p>
-            <div>{webDesktop && <button className="primary" onClick={() => openDirect()}><MessageSquare size={18}/>Личный разговор</button>}<button className={webDesktop ? 'secondary' : 'primary'} onClick={() => setModal('channel')}><Plus size={18}/>Создать канал</button><button className="secondary" onClick={openJoin}><Link2 size={18}/>Вступить в канал</button></div>
+            <p>{webDesktop ? `Выберите текстовый или голосовой канал${workspace?` сервера «${workspace.name}»`:''}.` : 'Создайте канал для друзей или вступите в существующий по приглашению.'}</p>
+            <div>{webDesktop&&canManageWorkspace?<button className="primary" onClick={()=>openChannelCreation('text')}><Plus size={18}/>Создать канал</button>:!webDesktop&&<button className="primary" onClick={() => setModal('channel')}><Plus size={18}/>Создать канал</button>}<button className="secondary" onClick={openJoin}><Link2 size={18}/>Вступить по приглашению</button></div>
             <span className="account-note"><ShieldCheck size={16}/>Все ваши каналы сохраняются в аккаунте</span>
           </div> : <>
             {directNotice?.channelId === channel.id && channelMembers.length < 2 && <div className="direct-pending-notice" role="status"><MessageSquare size={17}/><span>{directNotice.message}</span><button className="icon-btn" aria-label="Скрыть уведомление" onClick={() => setDirectNotice(null)}><X size={16}/></button></div>}
@@ -847,7 +960,7 @@ function App() {
                 <span className="eyebrow">{isDirect ? 'ВАШ ЛИЧНЫЙ РАЗГОВОР' : 'ВАШЕ МЕСТО ДЛЯ ХОРОШИХ РАЗГОВОРОВ'}</span>
                 <h1>{isDirect ? `@${selectedLabel}` : `Это #${selectedLabel}`}<span>.</span></h1>
                 <p>{isDirect ? `Здесь начинается ваша переписка с @${selectedLabel}. В этом разговоре можете участвовать только вы двое.` : channel.description || 'Здесь начинается общение.'}</p>
-                {!call && <div className="welcome-actions"><button className="primary" onClick={() => startCall(channel)}>{isDirect ? <Phone size={17}/> : <Headphones size={17}/>} {isDirect ? 'Начать звонок' : 'Войти в комнату'}<ArrowRight size={16}/></button><span>{isDirect ? 'Только для двоих' : `До ${channelCapacity(channel)} участников`} · голос, видео и экран</span></div>}
+                {!call && (!webDesktop||isDirect||channel.channelType==='voice') && <div className="welcome-actions"><button className="primary" disabled={ringBusy} onClick={() => isDirect&&channel.peer&&friends.friends.some(item=>item.id===channel.peer!.id)?void callFriend(channel.peer):startCall(channel)}>{isDirect ? <Phone size={17}/> : <Headphones size={17}/>} {isDirect ? 'Начать звонок' : 'Войти в комнату'}<ArrowRight size={16}/></button><span>{isDirect ? 'Только для двоих' : `До ${channelCapacity(channel)} участников`} · голос, видео и экран</span></div>}
               </div>
               {!config.mediaConfigured && <div className="setup-banner"><ShieldCheck size={18}/><span>Текстовый чат готов. Медиасервер пока недоступен.</span></div>}
               <div className="date-divider"><span>НАЧАЛО РАЗГОВОРА</span></div>
@@ -873,7 +986,7 @@ function App() {
             </form><span className="composer-hint"><span><b>Enter</b> — отправить <span className="hint-dot">·</span><b>Shift + Enter</b> — новая строка</span><span>{draft.length > 3500 ? `${draft.length}/4000` : 'Будьте на своей волне'}</span></span></div>
           </>}
         </div>
-        {membersOpen && <aside className="members-panel"><div className="members-title">УЧАСТНИКИ<span>{channelMembers.length}</span></div>
+        {membersOpen && channel && <aside className="members-panel"><div className="members-title">УЧАСТНИКИ<span>{channelMembers.length}</span></div>
           {channelMembers.map(person => <div className="member-row" key={person.id}>
             <span className="member-avatar"><Avatar user={person} small/><i className={`green-dot ${online.some(item => item.id === person.id) ? '' : 'offline'}`}/></span>
             <div><button className="member-profile-name" onClick={() => { setProfileUser(person); setModal('profile'); }}>{person.username}{person.id === user.id && <small>вы</small>}</button><span>{!isDirect && person.role === 'owner' ? 'Владелец' : !isDirect && person.role === 'admin' ? 'Администратор' : online.some(item => item.id === person.id) ? 'В сети' : 'Не в сети'}</span></div>
@@ -882,17 +995,18 @@ function App() {
           <div className="members-footer"><ShieldCheck size={18}/><strong>Свой сервер.<br/>Свои правила.</strong><p>Ваше пространство для разговоров без лишнего шума.</p><span>СИГНАЛ / 02</span></div>
         </aside>}</div>
       </main>
+      {ringingCall&&webDesktop&&<section className="direct-call-notification" role="dialog" aria-label={ringingCall.recipient.id===user.id?'Входящий звонок':'Исходящий звонок'} aria-live="polite"><span className="ring-avatar">{(ringingCall.recipient.id===user.id?ringingCall.caller.username:ringingCall.recipient.username).slice(0,1).toUpperCase()}</span><h2>{ringingCall.recipient.id===user.id?ringingCall.caller.username:ringingCall.recipient.username}</h2><p>{ringingCall.recipient.id===user.id?'Входящий личный звонок':'Вызываем друга…'}</p><div>{ringingCall.recipient.id===user.id?<><button className="ring-decline" disabled={ringBusy} onClick={()=>void respondCall(ringingCall,'decline')}><PhoneOff size={20}/>Отклонить</button><button className="ring-accept" disabled={ringBusy||Boolean(callIdRef.current&&callIdRef.current!==ringingCall.channelId)} onClick={()=>void respondCall(ringingCall,'accept')}><Phone size={20}/>Ответить</button></>:<button className="ring-decline" disabled={ringBusy} onClick={()=>void respondCall(ringingCall,'cancel')}><PhoneOff size={20}/>Отменить</button>}</div>{ringingCall.recipient.id===user.id&&call&&<small>Для ответа завершите текущий звонок.</small>}</section>}
       {error && <div className="toast" role="alert"><span>{error}</span><button className="icon-btn" aria-label="Закрыть уведомление" onClick={() => setError('')}><X size={18}/></button></div>}
-      {modal && <div className="modal-overlay" onClick={() => { if (!modalBusy) setModal(null); }}><section ref={modalRef} className={`modal-card modal-${modal}`} role="dialog" aria-modal="true" aria-label={modal === 'invite' ? 'Приглашение в канал' : modal === 'channel' ? 'Создать канал' : modal === 'join' ? 'Вступить в канал' : modal === 'inbox' ? 'Входящие приглашения' : modal === 'channel-settings' ? 'Управление каналом' : modal === 'profile' ? 'Профиль участника' : modal === 'pins' ? 'Закреплённые сообщения' : modal === 'direct' ? 'Личный разговор' : modal === 'direct-info' ? 'О личном разговоре' : 'Настройки приложения'} onClick={event => event.stopPropagation()}>
+      {modal && <div className="modal-overlay" onClick={() => { if (!modalBusy) setModal(null); }}><section ref={modalRef} className={`modal-card modal-${modal}`} role="dialog" aria-modal="true" aria-label={modal === 'invite' ? 'Приглашение в канал' : modal === 'channel' ? 'Создать канал' : modal==='workspace'?'Создать сервер': modal === 'join' ? 'Вступить в канал' : modal === 'inbox' ? 'Входящие приглашения' : modal === 'channel-settings' ? 'Управление каналом' : modal === 'profile' ? 'Профиль участника' : modal === 'pins' ? 'Закреплённые сообщения' : modal === 'direct' ? 'Личный разговор' : modal === 'direct-info' ? 'О личном разговоре' : 'Настройки приложения'} onClick={event => event.stopPropagation()}>
         <button className="icon-btn modal-close" onClick={() => setModal(null)} aria-label="Закрыть"><X size={20}/></button>
         <span className="modal-icon">{modal === 'settings' || modal === 'channel-settings' ? <Settings size={26}/> : modal === 'channel' ? <Hash size={26}/> : modal === 'inbox' ? <Bell size={26}/> : modal === 'direct' || modal === 'direct-info' ? <MessageSquare size={26}/> : <Link2 size={26}/>}</span>
         {modal === 'direct' && webDesktop && <DirectConversation key={`${user.id}:${directUsername}`} initialUsername={directUsername} onCreated={directCreated} onIncoming={incomingDirect}/>}
         {modal === 'direct-info' && isDirect && channel && <div className="direct-info">
           <h2>Разговор с @{selectedLabel}</h2><p>Личная переписка и голосовой канал для двоих. Вход другим пользователям закрыт; добавить третьего участника или пригласить по ссылке нельзя.</p>
           <div className="direct-info-members"><Users size={18}/><span>Только @{user.username} и @{selectedLabel}</span><strong>2 места</strong></div>
-          {!confirmDirectLeave ? <button className="channel-action destructive full" onClick={() => setConfirmDirectLeave(true)}><LogOut size={16}/>Покинуть разговор</button> : <div className="channel-confirm" role="alertdialog" aria-labelledby="direct-leave-title"><strong id="direct-leave-title">Покинуть личный разговор?</strong><p>Вы выйдете из звонка и потеряете доступ к этой переписке. Чтобы вернуться, потребуется новое приглашение собеседника.</p><div><button className="channel-action" disabled={modalBusy} onClick={() => setConfirmDirectLeave(false)}>Отмена</button><button className="channel-action destructive" disabled={modalBusy} onClick={() => void leaveDirect()}>{modalBusy ? 'Выходим…' : 'Покинуть'}</button></div></div>}
+          {!confirmDirectLeave ? <button className="channel-action destructive full" onClick={() => setConfirmDirectLeave(true)}><LogOut size={16}/>Покинуть разговор</button> : <div className="channel-confirm" role="alertdialog" aria-labelledby="direct-leave-title"><strong id="direct-leave-title">Покинуть личный разговор?</strong><p>Вы выйдете из звонка и потеряете доступ к этой переписке. Чтобы вернуться, откройте разговор снова. Для собеседников не из списка друзей может потребоваться новое приглашение.</p><div><button className="channel-action" disabled={modalBusy} onClick={() => setConfirmDirectLeave(false)}>Отмена</button><button className="channel-action destructive" disabled={modalBusy} onClick={() => void leaveDirect()}>{modalBusy ? 'Выходим…' : 'Покинуть'}</button></div></div>}
         </div>}
-        {modal === 'invite' && channel && !isDirect && <><h2>Пригласить в #{channel.name}</h2><ChannelInvitationForm key={channel.id} channelId={channel.id} channelName={channel.name} onError={setError}/><div className="invitation-link-section"><h3>Или пригласите по ссылке</h3><p>Ссылка действует 7 дней и допускает 10 новых вступлений. Получатель сам подтверждает добавление канала.</p>{!invite ? <button className="secondary full" disabled={modalBusy} onClick={generateInvite}>{modalBusy ? 'Создаём ссылку…' : 'Создать ссылку'}<Link2 size={17}/></button> : <><label className="invite-label">ССЫЛКА В КАНАЛ<input readOnly value={invite} onFocus={event => event.target.select()}/></label><button className="secondary full" onClick={copyInvite}>{copied ? <Check size={17}/> : <Copy size={17}/>} {copied ? 'Ссылка скопирована' : 'Скопировать ссылку'}</button></>}</div></>}
+        {modal === 'invite' && channel && !isDirect && <><h2>{webDesktop&&workspace?`Пригласить на сервер «${workspace.name}»`:`Пригласить в #${channel.name}`}</h2><ChannelInvitationForm key={channel.id} channelId={channel.id} channelName={channel.name} onError={setError}/><div className="invitation-link-section"><h3>Или пригласите по ссылке</h3><p>Ссылка действует 7 дней и допускает 10 новых вступлений. Получатель подтвердит вступление на сервер и получит доступ к его текстовым и голосовым каналам.</p>{!invite ? <button className="secondary full" disabled={modalBusy} onClick={generateInvite}>{modalBusy ? 'Создаём ссылку…' : 'Создать ссылку'}<Link2 size={17}/></button> : <><label className="invite-label">ССЫЛКА В КАНАЛ<input readOnly value={invite} onFocus={event => event.target.select()}/></label><button className="secondary full" onClick={copyInvite}>{copied ? <Check size={17}/> : <Copy size={17}/>} {copied ? 'Ссылка скопирована' : 'Скопировать ссылку'}</button></>}</div></>}
         {modal === 'channel-settings' && channel && !isDirect && <ChannelSettings channel={channel} userId={user.id} onError={setError} onChanged={next => {
           if (authUserId.current !== user.id) return;
           if (next) mutateChannels(old => old.map(item => item.id === next.id ? { ...item, ...next } : item));
@@ -903,11 +1017,12 @@ function App() {
           if (call?.id === id) stopCall();
           mutateChannels(old => old.filter(item => item.id !== id)); setSelected(old => old === id ? '' : old); setModal(null);
         }}/>}
-        {modal === 'profile' && profileUser && <UserProfile user={profileUser} role={isDirect ? undefined : profileUser.role} online={online.some(item => item.id === profileUser.id)} onError={setError} onDirect={webDesktop && profileUser.id !== user.id ? () => openDirect(profileUser.username) : undefined}/>}
+        {modal === 'profile' && profileUser && <><UserProfile user={profileUser} role={isDirect ? undefined : profileUser.role} online={online.some(item => item.id === profileUser.id)} onError={setError} onDirect={webDesktop && profileUser.id !== user.id ? () => friends.friends.some(item=>item.id===profileUser.id)?void openFriendChat(profileUser):openDirect(profileUser.username) : undefined}/>{webDesktop&&profileUser.id!==user.id&&<button className="secondary full profile-friend-button" disabled={Boolean(friendBusy)||friends.friends.some(item=>item.id===profileUser.id)||friends.outgoing.some(item=>item.user.id===profileUser.id)} onClick={()=>void friendAction('add','/friend-requests',{username:profileUser.username})}><UserPlus size={17}/>{friends.friends.some(item=>item.id===profileUser.id)?'У вас в друзьях':friends.outgoing.some(item=>item.user.id===profileUser.id)?'Запрос отправлен':'Добавить в друзья'}</button>}</>}
         {modal === 'pins' && channel && <><h2>Закреплённые сообщения</h2><PinnedMessages key={channel.id} channelId={channel.id} currentUserId={user.id} canModerate={canManageChannel} liveRevision={messageRevision} deletedMessageIds={deletedMessageIds.current} onUpdated={updateMessage} onDeleted={deleteMessage} onError={setError}/></>}
         {modal === 'inbox' && <><h2>Входящие приглашения</h2><Inbox invitations={invitations} onRespond={respondInvitation} busyId={busyInvitation}/></>}
-        {modal === 'channel' && <><h2>Ещё одно место для общения</h2><form onSubmit={createChannel}><p>Вы станете владельцем канала и сможете приглашать участников. Внутри — чат, голос, видео и показ экрана.</p><label>Название<input name="name" required maxLength={40} placeholder="Например, Кино на вечер"/></label><label>Описание<input name="description" maxLength={180} placeholder="О чём будем говорить?"/></label><button className="primary full" disabled={modalBusy}>{modalBusy ? 'Создаём…' : 'Создать канал'}<Plus size={17}/></button></form></>}
-        {modal === 'join' && <><h2>Вступить в канал</h2><p>Приглашение добавит канал в ваш аккаунт. Ваши остальные каналы останутся с вами.</p><form onSubmit={previewInvite}><label>Ссылка или код приглашения<input value={joinValue} onChange={event => { setJoinValue(event.target.value); setInviteInfo(null); setJoinError(''); }} placeholder="signal://invite/…" autoComplete="off" maxLength={256} required/></label><button className="secondary full" disabled={modalBusy || !joinValue.trim()}>{modalBusy ? 'Подождите…' : 'Посмотреть канал'}<ArrowRight size={17}/></button></form>{inviteInfo && <div className="invite-preview"><Hash size={24}/><div><strong>{inviteInfo.channel.name}</strong><span>{channels.some(item => item.id === inviteInfo.channel.id) ? 'Вы уже участник' : inviteInfo.valid ? 'Приглашение действительно' : 'Срок или число вступлений исчерпаны'}</span></div></div>}{inviteInfo && (inviteInfo.valid || channels.some(item => item.id === inviteInfo.channel.id)) && <button className="primary full" disabled={modalBusy} onClick={joinChannel}>{channels.some(item => item.id === inviteInfo.channel.id) ? 'Открыть канал' : 'Принять приглашение'}<Check size={17}/></button>}{joinError && <p className="form-error" role="alert">{joinError}</p>}</>}
+        {modal === 'workspace'&&webDesktop&&<><h2>Создать сервер</h2><p>Соберите друзей в одном месте. Внутри можно создать несколько текстовых и голосовых каналов.</p><form onSubmit={createWorkspace}><label>Название сервера<input name="name" required maxLength={40} placeholder="Например, Свой круг"/></label><label>Описание<input name="description" maxLength={180} placeholder="Место для ваших разговоров"/></label><button className="primary full" disabled={modalBusy}>{modalBusy?'Создаём…':'Создать сервер'}<Plus size={17}/></button></form></>}
+        {modal === 'channel' && <><h2>{webDesktop?'Создать канал':'Ещё одно место для общения'}</h2><form onSubmit={createChannel}><p>{webDesktop?`Новый канал на сервере «${workspace?.name||'Свой круг'}». Доступ получат его участники.`:'Вы станете владельцем канала и сможете приглашать участников. Внутри — чат, голос, видео и показ экрана.'}</p>{webDesktop&&<fieldset className="channel-type-picker"><legend>Тип канала</legend><label className={newChannelType==='text'?'active':''}><input type="radio" name="channelType" value="text" checked={newChannelType==='text'} onChange={()=>setNewChannelType('text')}/><Hash size={23}/><span><strong>Текстовый</strong><small>Сообщения и обсуждения</small></span></label><label className={newChannelType==='voice'?'active':''}><input type="radio" name="channelType" value="voice" checked={newChannelType==='voice'} onChange={()=>setNewChannelType('voice')}/><Volume2 size={23}/><span><strong>Голосовой</strong><small>Голос, видео и экран · до 10 участников</small></span></label></fieldset>}<label>Название<input name="name" required maxLength={40} placeholder={newChannelType==='voice'?'Например, Гостиная':'Например, общий'}/></label><label>Описание<input name="description" maxLength={180} placeholder="О чём будем говорить?"/></label><button className="primary full" disabled={modalBusy}>{modalBusy ? 'Создаём…' : 'Создать канал'}<Plus size={17}/></button></form></>}
+        {modal === 'join' && <><h2>Вступить в канал</h2><p>Приглашение добавит сервер и его текстовые и голосовые каналы в ваш аккаунт.</p><form onSubmit={previewInvite}><label>Ссылка или код приглашения<input value={joinValue} onChange={event => { setJoinValue(event.target.value); setInviteInfo(null); setJoinError(''); }} placeholder="signal://invite/…" autoComplete="off" maxLength={256} required/></label><button className="secondary full" disabled={modalBusy || !joinValue.trim()}>{modalBusy ? 'Подождите…' : 'Посмотреть канал'}<ArrowRight size={17}/></button></form>{inviteInfo && <div className="invite-preview"><Hash size={24}/><div><strong>{inviteInfo.channel.name}</strong><span>{channels.some(item => item.id === inviteInfo.channel.id) ? 'Вы уже участник' : inviteInfo.valid ? 'Приглашение действительно' : 'Срок или число вступлений исчерпаны'}</span></div></div>}{inviteInfo && (inviteInfo.valid || channels.some(item => item.id === inviteInfo.channel.id)) && <button className="primary full" disabled={modalBusy} onClick={joinChannel}>{channels.some(item => item.id === inviteInfo.channel.id) ? 'Открыть канал' : 'Принять приглашение'}<Check size={17}/></button>}{joinError && <p className="form-error" role="alert">{joinError}</p>}</>}
         {modal === 'settings' && <><h2>Ваш Сигнал</h2><p>Вы вошли как <strong>@{user.username}</strong>. Каналы и переписка хранятся на вашем сервере.</p>{window.signalDesktop && <div className="desktop-settings"><label><input type="checkbox" checked={desktopSettings.openAtLogin} onChange={event => void saveDesktopSetting('openAtLogin', event.target.checked)}/><span>Запускать вместе с Windows</span></label><label><input type="checkbox" checked={desktopSettings.closeToTray} onChange={event => void saveDesktopSetting('closeToTray', event.target.checked)}/><span>При закрытии оставаться в трее</span></label><p>Для полного выхода используйте меню Сигнала в трее.</p></div>}<DesktopUpdates/>{window.signalAndroidBridge && <button className="secondary full" onClick={() => androidCommand({type:'checkUpdate'})}><Download size={17}/>Проверить обновления Android</button>}<div className="server-address"><ShieldCheck size={17}/><span>Сервер: {SERVER_ORIGIN}</span></div><p className="modal-footnote">Камера, микрофон, устройства и качество трансляции настраиваются в голосовой комнате.</p></>}
       </section></div>}
     </div>;

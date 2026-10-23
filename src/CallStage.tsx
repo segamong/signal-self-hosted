@@ -9,9 +9,10 @@ import { filterScreenAudio, screenAudioCaptureOptions } from './screenAudio';
 import { availableScreenCodecs, chooseScreenCodec, type ScreenCodecChoice } from './screenCodecs';
 import { loadAudioPreferences, saveAudioPreferences, microphoneCapture, VOICE_ENCODING, type AudioPreferences } from './audioPreferences';
 import { applyMicrophoneProcessing, processMicrophoneTrack } from './microphoneProcessor';
-import { createCallEncryption, prepareCallKey } from './callEncryption';
+import { createCallEncryption, prepareCallKey, waitForCallEncryption } from './callEncryption';
 import './media-settings.css';
 import { channelCapacity, type Channel } from './channelTypes';
+import { CallSettingsDrawer } from './CallSettingsDrawer';
 
 export interface CallStageProps {
   channel: Channel;
@@ -308,8 +309,8 @@ export default function CallStage({ channel, user, onLeave, onError, initialPref
     capture.dispose();
   }, []);
 
-  const updateScreenSubscriptions = useCallback((current: Room) => {
-    if (roomRef.current !== current) return;
+  const updateMediaSubscriptions = useCallback((current: Room) => {
+    if (roomRef.current !== current || !current.isE2EEEnabled) return;
     const shares = participantsSharing(current);
     const selected = shares.find(participant => participant.identity === focusedShareRef.current) || shares[0];
     const selectedIdentity = selected?.identity ?? null;
@@ -319,8 +320,8 @@ export default function CallStage({ channel, user, onLeave, onError, initialPref
     }
     for (const participant of current.remoteParticipants.values()) {
       for (const publication of participant.trackPublications.values()) {
-        if (publication.source !== Track.Source.ScreenShare && publication.source !== Track.Source.ScreenShareAudio) continue;
-        const wanted = participant.identity === selectedIdentity;
+        const screen = publication.source === Track.Source.ScreenShare || publication.source === Track.Source.ScreenShareAudio;
+        const wanted = publication.isEncrypted && (!screen || participant.identity === selectedIdentity);
         if (publication.isDesired !== wanted) publication.setSubscribed(wanted);
         if (wanted && publication.source === Track.Source.ScreenShare) publication.setVideoQuality(VideoQuality.HIGH);
       }
@@ -331,7 +332,7 @@ export default function CallStage({ channel, user, onLeave, onError, initialPref
     focusedShareRef.current = identity;
     setFocusedShare(identity);
     const current = roomRef.current;
-    if (current) updateScreenSubscriptions(current);
+    if (current) updateMediaSubscriptions(current);
   };
 
   const reportPreferences = useCallback((owner?: Room, changes?: Partial<CallPreferences>) => {
@@ -427,7 +428,7 @@ export default function CallStage({ channel, user, onLeave, onError, initialPref
         encryptionFailure();
         return;
       }
-      updateScreenSubscriptions(nextRoom);
+      updateMediaSubscriptions(nextRoom);
       refresh(value => value + 1);
       setState(nextRoom.state);
     };
@@ -524,10 +525,13 @@ export default function CallStage({ channel, user, onLeave, onError, initialPref
         const keyInfo = await prepareCallKey(encryption.keyProvider, data.encryption);
         if (cancelled || shutdownPromise) return;
         await nextRoom.setE2EEEnabled(true);
-        if (!nextRoom.isE2EEEnabled) throw new Error('Не удалось включить шифрование звонка. Подключение остановлено.');
         if (cancelled || shutdownPromise) return;
+        await Promise.all([
+          waitForCallEncryption(nextRoom, controller.signal),
+          nextRoom.connect(data.url, data.token, { autoSubscribe: false }),
+        ]);
+        if (!nextRoom.isE2EEEnabled) throw new Error('Браузер не подтвердил шифрование звонка. Подключение остановлено.');
         setEncryptionState({ room: nextRoom, ...keyInfo });
-        await nextRoom.connect(data.url, data.token, { autoSubscribe: true });
         if (cancelled || shutdownPromise) { await shutdown(); return; }
         if (hasUnencryptedMedia(nextRoom)) throw new Error('В канале есть участник без шифрования. Все участники должны обновить Сигнал и подключиться снова.');
         connectedOnce = true;
@@ -561,6 +565,7 @@ export default function CallStage({ channel, user, onLeave, onError, initialPref
         setConnectionError(message);
         setState(ConnectionState.Disconnected);
         callbacks.current.onError(message);
+        controller.abort();
         await shutdown();
       }
     })();
@@ -585,7 +590,7 @@ export default function CallStage({ channel, user, onLeave, onError, initialPref
       // disconnect(true) stops all local capture tracks, including screen audio.
       void shutdown();
     };
-  }, [channel.id, user.id, attempt, releaseScreenCapture, reportPreferences, updateScreenSubscriptions]);
+  }, [channel.id, user.id, attempt, releaseScreenCapture, reportPreferences, updateMediaSubscriptions]);
 
   useEffect(() => {
     if (!room) return;
@@ -597,8 +602,8 @@ export default function CallStage({ channel, user, onLeave, onError, initialPref
   }, [room, cameraQuality]);
 
   useEffect(() => {
-    if (room) updateScreenSubscriptions(room);
-  }, [room, focusedShare, updateScreenSubscriptions]);
+    if (room) updateMediaSubscriptions(room);
+  }, [room, focusedShare, updateMediaSubscriptions]);
 
   const listDevices = async () => {
     const requestingRoom = roomRef.current;
@@ -619,7 +624,7 @@ export default function CallStage({ channel, user, onLeave, onError, initialPref
 
   const act = (key: string, operation: (current: Room) => Promise<unknown>) => {
     const current = roomRef.current;
-    if (!current || current.state !== ConnectionState.Connected || busy) return;
+    if (!current || current.state !== ConnectionState.Connected || !current.isE2EEEnabled || busy) return;
     setBusy(key);
     // Invoke immediately so capture APIs retain the browser's click activation.
     void operation(current).catch(error => {
@@ -808,6 +813,36 @@ export default function CallStage({ channel, user, onLeave, onError, initialPref
   const supportedAudio = navigator.mediaDevices?.getSupportedConstraints() || {};
   const sourceAudioSettings = room?.localParticipant.getTrackPublication(Track.Source.Microphone)?.audioTrack?.getSourceTrackSettings();
 
+  const toggleDeafened = () => {
+    if (!connected) return;
+    setDeafened(value => !value);
+    if (deafened && roomRef.current) void roomRef.current.startAudio().catch(markAudioBlocked);
+  };
+  const dockState = useRef({ connected: false, microphone: false, deafened: false, busy: false });
+  dockState.current = { connected, microphone: microphoneOn, deafened, busy: Boolean(busy) };
+  const deafenCommand = useRef(toggleDeafened);
+  deafenCommand.current = toggleDeafened;
+  useEffect(() => {
+    const publish = () => window.dispatchEvent(new CustomEvent('signal-call-state', { detail: dockState.current }));
+    const command = (event: Event) => {
+      if (!dockState.current.connected || dockState.current.busy) return;
+      const action = (event as CustomEvent<{ action?: string }>).detail?.action;
+      if (action === 'microphone') toggleMicrophoneRef.current();
+      if (action === 'deafen') deafenCommand.current();
+    };
+    window.addEventListener('signal-call-state-request', publish);
+    window.addEventListener('signal-call-command', command);
+    publish();
+    return () => {
+      window.removeEventListener('signal-call-state-request', publish);
+      window.removeEventListener('signal-call-command', command);
+      window.dispatchEvent(new CustomEvent('signal-call-state', { detail: { connected: false, microphone: false, deafened: false, busy: false } }));
+    };
+  }, []);
+  useEffect(() => {
+    window.dispatchEvent(new CustomEvent('signal-call-state', { detail: dockState.current }));
+  }, [connected, microphoneOn, deafened, busy]);
+
   return <section className={`call-stage${shareParticipant ? ' has-share' : ''}`} aria-label={`Голосовой канал ${channel.name}`}>
     <div className="call-heading"><div><span className={`call-connection${connected ? ' connected' : ''}`}><Radio size={14} />{statusLabel}</span><h2>{channel.name}</h2></div>
       <div className="call-heading-meta">{connected && encryptionState?.room === room && <details className="call-encryption"><summary title="Проверить шифрование звонка"><LockKeyhole size={14} /> Шифрование включено</summary><div className="encryption-popover"><strong>Код безопасности звонка</strong><code>{encryptionState.fingerprint}</code><p>Сверьте код с собеседником. Звук, видео и экран шифруются на устройстве. Ключ выдаёт сервер Сигнала; медиасервер LiveKit его не получает. Текстовые чаты этим ключом не шифруются.</p><small>Версия ключа: {encryptionState.epoch}</small></div></details>}<span className="call-count">{participants.length} / {participantLimit} {participantLimit === 2 ? 'участника' : 'участников'}</span></div></div>
@@ -829,7 +864,7 @@ export default function CallStage({ channel, user, onLeave, onError, initialPref
       {participants.length === 1 && !shareParticipant && <div className="call-alone"><span>Здесь пока тихо</span><p>{channel.kind === 'direct' ? 'Вы в личном разговоре. Дождитесь собеседника.' : 'Вы уже в канале. Пригласите друзей и начните разговор.'}</p></div>}
     </>}
 
-    {settingsOpen && <div className="call-settings"><div className="settings-heading"><h3>Звук и видео</h3><button className="text-button" onClick={() => void listDevices()}><RefreshCw size={14} />Обновить устройства</button></div>
+    {settingsOpen && <CallSettingsDrawer onClose={() => setSettingsOpen(false)}><div className="call-settings"><div className="settings-heading"><h3>Устройства</h3><button className="text-button" onClick={() => void listDevices()}><RefreshCw size={14} />Обновить устройства</button></div>
       <div className="device-grid">{(['audioinput', 'audiooutput', 'videoinput'] as const).map(kind => <label key={kind}>{kind === 'audioinput' ? 'Микрофон' : kind === 'audiooutput' ? 'Наушники / динамики' : 'Камера'}<select value={deviceSelection[kind]} disabled={!connected || !!busy || (kind === 'audiooutput' && !('setSinkId' in HTMLMediaElement.prototype))} onChange={event => changeDevice(kind, event.target.value)}><option value="default">По умолчанию</option>{devices.filter(device => device.kind === kind && device.deviceId !== 'default' && device.deviceId !== '').map((device, index) => <option key={device.deviceId} value={device.deviceId}>{device.label || `${kind === 'videoinput' ? 'Камера' : 'Устройство'} ${index + 1}`}</option>)}</select></label>)}</div>
       <p className="settings-hint">Названия устройств появятся после разрешения браузера. Выбор динамиков доступен в поддерживаемых браузерах.</p>
       <section className="voice-settings" aria-label="Обработка голоса">
@@ -863,15 +898,15 @@ export default function CallStage({ channel, user, onLeave, onError, initialPref
       <p className="settings-hint">Для звука включите его передачу в окне выбора экрана или вкладки браузера.</p>
       {window.signalDesktop && desktopScreenAudio === 'unavailable' && <p className="settings-hint">Эта версия Windows не поддерживает захват системного звука с исключением голосов звонка. Для передачи звука отдельной вкладки откройте Сигнал в браузере.</p>}
       <p className="settings-hint">«Авто» учитывает оценку кодирования браузером. При нехватке процессора или полосы частота кадров может падать. Получаем только видео и звук выбранной демонстрации.</p>
-    </div>}
+    </div></CallSettingsDrawer>}
 
     <div className="call-toolbar"><div className="toolbar-main">
       <button className={`call-control${microphoneOn ? '' : ' off'}`} disabled={!connected || !!busy} onClick={toggleMicrophone} title={microphoneOn ? 'Выключить микрофон' : 'Включить микрофон'} aria-label={microphoneOn ? 'Выключить микрофон' : 'Включить микрофон'} aria-pressed={microphoneOn}>{busy === 'microphone' ? <LoaderCircle className="spin" size={21} /> : microphoneOn ? <Mic size={21} /> : <MicOff size={21} />}<span>Микрофон</span></button>
-      <button className={`call-control${deafened ? ' off' : ''}`} disabled={!connected} onClick={() => { setDeafened(value => !value); if (deafened && roomRef.current) void roomRef.current.startAudio().catch(markAudioBlocked); }} title={deafened ? 'Включить звук' : 'Отключить входящий звук'} aria-label={deafened ? 'Включить входящий звук' : 'Отключить входящий звук'} aria-pressed={!deafened}>{deafened ? <HeadphoneOff size={21} /> : <Headphones size={21} />}<span>Наушники</span></button>
+      <button className={`call-control${deafened ? ' off' : ''}`} disabled={!connected} onClick={toggleDeafened} title={deafened ? 'Включить звук' : 'Отключить входящий звук'} aria-label={deafened ? 'Включить входящий звук' : 'Отключить входящий звук'} aria-pressed={!deafened}>{deafened ? <HeadphoneOff size={21} /> : <Headphones size={21} />}<span>Наушники</span></button>
       <span className="toolbar-divider" />
       <button className={`call-control${cameraOn ? ' active' : ''}`} disabled={!connected || !!busy} onClick={toggleCamera} aria-label={cameraOn ? 'Выключить камеру' : 'Включить камеру'} aria-pressed={cameraOn}>{busy === 'camera' ? <LoaderCircle className="spin" size={21} /> : cameraOn ? <Video size={21} /> : <VideoOff size={21} />}<span>Камера</span></button>
       <button className={`call-control${sharing ? ' active' : ''}`} disabled={!connected || !!busy} onClick={toggleScreen} title={sharing ? 'Остановить трансляцию экрана' : `Трансляция экрана: ${SCREEN_PROFILES[screenProfile].label}, ${screenBitrate / 1_000_000} Мбит/с`} aria-label={sharing ? 'Остановить трансляцию экрана' : 'Начать трансляцию экрана'} aria-pressed={sharing}>{busy === 'screen' ? <LoaderCircle className="spin" size={21} /> : sharing ? <MonitorOff size={21} /> : <MonitorUp size={21} />}<span>Трансляция экрана</span></button>
-      <button className={`call-control${settingsOpen ? ' active' : ''}`} onClick={() => { setSettingsOpen(value => !value); if (!settingsOpen) void listDevices(); }} aria-label="Настройки звука и видео" aria-expanded={settingsOpen}><Settings2 size={21} /><span>Настройки <ChevronDown size={12} /></span></button>
+      <button className={`call-control${settingsOpen ? ' active' : ''}`} onClick={() => { setSettingsOpen(value => !value); if (!settingsOpen) void listDevices(); }} aria-label="Настройки звука и видео" aria-haspopup="dialog" aria-controls="call-media-settings" aria-expanded={settingsOpen}><Settings2 size={21} /><span>Настройки <ChevronDown size={12} /></span></button>
       <span className="toolbar-divider" />
       <button className="call-control leave-call" onClick={leave} aria-label="Выйти из голосового канала"><PhoneOff size={21} /><span>Выйти</span></button>
     </div><span className="toolbar-note"><span className="status-dot" />{connected ? 'WebRTC · шифрование медиа включено' : 'Ожидание подключения'}</span></div>

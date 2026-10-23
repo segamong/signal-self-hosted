@@ -1,4 +1,4 @@
-import { ExternalE2EEKeyProvider, isE2EESupported } from 'livekit-client';
+import { ExternalE2EEKeyProvider, isE2EESupported, RoomEvent, type Room, type Participant } from 'livekit-client';
 import EncryptionWorker from 'livekit-client/e2ee-worker?worker';
 
 export interface CallEncryptionParameters {
@@ -16,6 +16,31 @@ export function createCallEncryption() {
   const keyProvider = new ExternalE2EEKeyProvider();
   const worker = new EncryptionWorker();
   return { keyProvider, worker };
+}
+
+// The SDK flag is updated by a worker acknowledgement after signaling supplies
+// the participant identity. setE2EEEnabled() alone only sets the publish policy.
+export function waitForCallEncryption(room: Room, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const finish = (error?: Error) => {
+      clearTimeout(timer);
+      room.off(RoomEvent.ParticipantEncryptionStatusChanged, changed);
+      room.off(RoomEvent.EncryptionError, failed);
+      signal.removeEventListener('abort', aborted);
+      if (error) reject(error); else resolve();
+    };
+    const changed = (enabled: boolean, participant?: Participant) => {
+      if (enabled && (participant?.isLocal || room.isE2EEEnabled)) finish();
+    };
+    const failed = () => finish(new Error('Не удалось подготовить шифрование звонка. Подключитесь снова.'));
+    const aborted = () => finish(new DOMException('Подключение отменено', 'AbortError'));
+    const timer = setTimeout(() => finish(new Error('Браузер не подтвердил шифрование звонка. Обновите страницу и повторите подключение.')), 12000);
+    room.on(RoomEvent.ParticipantEncryptionStatusChanged, changed);
+    room.on(RoomEvent.EncryptionError, failed);
+    signal.addEventListener('abort', aborted, { once: true });
+    if (signal.aborted) aborted();
+    else if (room.isE2EEEnabled) finish();
+  });
 }
 
 export async function prepareCallKey(provider: ExternalE2EEKeyProvider, value: unknown) {

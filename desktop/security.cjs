@@ -22,7 +22,7 @@ function apiTarget(value, method) {
   const pathname = url.pathname;
   let permitted = false;
   if (method === 'GET') {
-    permitted = /^\/api\/(health|config|me|channels|status|invitations)$/.test(pathname)
+    permitted = /^\/api\/(health|config|me|channels|status|invitations|workspaces|friends|direct-calls)$/.test(pathname)
       || new RegExp(`^/api/invites/${ID}$`).test(pathname)
       || new RegExp(`^/api/channels/${ID}/(members|bans|pins)$`).test(pathname);
     if (new RegExp(`^/api/channels/${ID}/messages$`).test(pathname)) {
@@ -31,7 +31,11 @@ function apiTarget(value, method) {
       if (before !== null && !/^[1-9]\d{0,14}$/.test(before)) permitted = false;
     } else if (url.search) permitted = false;
   } else if (method === 'POST' && !url.search) {
-    permitted = /^\/api\/(login|register|logout|channels|direct-channels)$/.test(pathname)
+    permitted = /^\/api\/(login|register|logout|channels|direct-channels|workspaces|friend-requests|direct-calls)$/.test(pathname)
+      || new RegExp(`^/api/workspaces/${ID}/channels$`).test(pathname)
+      || new RegExp(`^/api/friend-requests/${ID}/respond$`).test(pathname)
+      || new RegExp(`^/api/friends/${ID}/remove$`).test(pathname)
+      || new RegExp(`^/api/direct-calls/${ID}/respond$`).test(pathname)
       || new RegExp(`^/api/channels/${ID}/(messages|join|invites|invitations|settings|leave|delete)$`).test(pathname)
       || new RegExp(`^/api/channels/${ID}/members/${ID}$`).test(pathname)
       || new RegExp(`^/api/channels/${ID}/messages/[1-9]\\d{0,14}/action$`).test(pathname)

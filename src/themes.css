@@ -1,0 +1,161 @@
+/* Theme tokens are installed only by the browser/Windows theme control. */
+:root[data-signal-theme] {
+  color-scheme: dark;
+  --signal-bg: #313338;
+  --signal-panel: #2b2d31;
+  --signal-deep: #1e1f22;
+  --signal-dock: #232428;
+  --signal-input: #1e1f22;
+  --signal-hover: #35373c;
+  --signal-selected: #404249;
+  --signal-border: #45474e;
+  --signal-text: #dbdee1;
+  --signal-heading: #f2f3f5;
+  --signal-muted: #a1a6af;
+  --signal-interactive: #b5bac1;
+  --signal-accent: #5865f2;
+  --signal-accent-hover: #4752c4;
+  --signal-accent-soft: #5865f226;
+  --signal-focus: #00a8fc;
+  --signal-success: #3bbd77;
+  --signal-danger: #fa777c;
+  --accent: var(--signal-accent);
+  --muted: var(--signal-muted);
+  --line: var(--signal-border);
+  --panel: var(--signal-panel);
+  --text-normal: var(--signal-text);
+  --text-muted: var(--signal-muted);
+  --text-heading: var(--signal-heading);
+  --interactive-normal: var(--signal-interactive);
+  --background-primary: var(--signal-bg);
+  --background-secondary: var(--signal-panel);
+  --background-tertiary: var(--signal-deep);
+  color: var(--signal-text);
+  background: var(--signal-bg);
+}
+:root[data-signal-theme="midnight"] {
+  --signal-bg: #161b27; --signal-panel: #101622; --signal-deep: #090d16; --signal-dock: #0d111b;
+  --signal-input: #090d16; --signal-hover: #20283a; --signal-selected: #2c3650; --signal-border: #34405a;
+  --signal-text: #dce3f1; --signal-heading: #f5f7ff; --signal-muted: #a0aec5; --signal-interactive: #bdcbe2;
+  --signal-accent: #5269db; --signal-accent-hover: #4358bf; --signal-accent-soft: #5269db26;
+}
+:root[data-signal-theme="light"] {
+  color-scheme: light;
+  --signal-bg: #ffffff; --signal-panel: #f2f3f5; --signal-deep: #e3e5e8; --signal-dock: #e9ebee;
+  --signal-input: #e9ebef; --signal-hover: #e4e6eb; --signal-selected: #d7dae1; --signal-border: #c6cad3;
+  --signal-text: #30343b; --signal-heading: #17191e; --signal-muted: #5d6470; --signal-interactive: #4c5360;
+  --signal-accent: #4752c4; --signal-accent-hover: #3942a5; --signal-accent-soft: #4752c416;
+  --signal-focus: #005dcc; --signal-success: #1e7447; --signal-danger: #b12737;
+}
+:root[data-signal-theme="violet"] {
+  --signal-bg: #30283e; --signal-panel: #272134; --signal-deep: #1c1727; --signal-dock: #211b2c;
+  --signal-input: #1c1727; --signal-hover: #3b314c; --signal-selected: #4b3d60; --signal-border: #5b4b70;
+  --signal-text: #e4ddeb; --signal-heading: #fcf6ff; --signal-muted: #b8aac8; --signal-interactive: #cec0de;
+  --signal-accent: #7659d5; --signal-accent-hover: #6348b9; --signal-accent-soft: #7659d526;
+}
+:root[data-signal-theme="forest"] {
+  --signal-bg: #22352f; --signal-panel: #1b2b25; --signal-deep: #101e1a; --signal-dock: #16251f;
+  --signal-input: #101e1a; --signal-hover: #2c433a; --signal-selected: #385648; --signal-border: #486455;
+  --signal-text: #d8e9e0; --signal-heading: #f2fff7; --signal-muted: #a7c2b4; --signal-interactive: #bfd8c9;
+  --signal-accent: #287858; --signal-accent-hover: #216548; --signal-accent-soft: #45ae7d26;
+  --signal-focus: #73d0a4;
+}
+:root[data-signal-theme="rose"] {
+  --signal-bg: #38272e; --signal-panel: #2e2027; --signal-deep: #21171d; --signal-dock: #281b22;
+  --signal-input: #21171d; --signal-hover: #473039; --signal-selected: #5a3c47; --signal-border: #72525e;
+  --signal-text: #ecdee3; --signal-heading: #fff5f8; --signal-muted: #c6abb5; --signal-interactive: #ddc0ca;
+  --signal-accent: #b44158; --signal-accent-hover: #9d354b; --signal-accent-soft: #b4415826;
+}
+
+/* Override the original fixed dark palette without tinting video or avatars. */
+:root[data-signal-theme] body { color: var(--signal-text); background: var(--signal-bg); }
+:root[data-signal-theme] :is(.main-panel,.channel-header,.composer-wrap,.account-welcome,.auth-main,.modal-card,.message-tools,.friends-home,.friends-page,.home-panel) { background: var(--signal-bg); color: var(--signal-text); }
+:root[data-signal-theme] :is(.server-rail,.app-shell,.desktop-titlebar) { background: var(--signal-deep); color: var(--signal-interactive); }
+:root[data-signal-theme] :is(.channel-sidebar,.members-panel,.boot,.call-settings-drawer,.invitation-inbox-card,.channel-invitation-form,.invite-preview,.channel-member,.channel-permissions,.channel-moderation-help,.channel-settings-tabs,.direct-info-members,.server-address,.message-reaction-picker,.pinned-message,.friend-card) { background: var(--signal-panel); color: var(--signal-text); }
+:root[data-signal-theme] :is(.user-panel,.sidebar-call,.modal-card.modal-profile) { background: var(--signal-dock); }
+:root[data-signal-theme] :is(.composer,.message-editor) { background: var(--signal-hover); }
+:root[data-signal-theme] :is(.user-profile-heading,.user-profile-role,.toast,.invitation-inbox-state) { background: var(--signal-deep); color: var(--signal-text); }
+:root[data-signal-theme] .auth-shell { background: var(--signal-accent); }
+:root[data-signal-theme] :is(.brand,.brand strong,.workspace-heading strong,.channel-header>strong,.user-panel strong,.message-author>strong,.member-profile-name:hover,.welcome h1,.empty-chat strong,.account-welcome h1,.modal-card h2,.invitation-inbox-channel-info h3,.channel-member-identity strong,.user-profile-heading h2,.friends-home h1,.friends-page h1) { color: var(--signal-heading); }
+:root[data-signal-theme] :is(.channel-description,.workspace-note,.connection-chip,.message p,.composer textarea,.modal-card p,.channel-member-identity strong small,.channel-permissions,.user-profile-role,.user-profile-status.online,.direct-info-members,.call-status p) { color: var(--signal-text); }
+:root[data-signal-theme] :is(.section-label,.voice-label>span,.channel-button,.voice-channel,.sidebar-join,.sidebar-empty,.sidebar-card p,.member-profile-name,.members-title,.members-title>span,.message-author time,.message-edited,.message-pinned-label,.composer-hint,.empty-chat span,.welcome>p,.account-welcome>p,.history-state,.eyebrow,.direct-channel,.direct-empty,.private-channel,.call-status,.settings-hint,.desktop-settings p,.desktop-titlebar>div>span,.toolbar-note,.user-panel>div>span,.theme-menu-popup>p) { color: var(--signal-muted); }
+:root[data-signal-theme] :is(.channel-button svg,.voice-channel svg,.channel-header>svg,.workspace-heading>svg,.workspace-note>svg,.composer-hash,.icon-btn,.header-actions .icon-btn,.send-button,.direct-call-button,.user-profile-heading>span) { color: var(--signal-interactive); }
+:root[data-signal-theme] :is(.channel-button,.voice-channel,.direct-channel,.private-channel,.sidebar-join,.member-row,.direct-empty,.message):hover { color: var(--signal-heading); background: var(--signal-hover); }
+:root[data-signal-theme] :is(.channel-button.active,.channel-button.active:hover,.voice-channel.connected,.direct-channel.active,.private-channel.active,.channel-settings-tabs button.active) { color: var(--signal-heading); background: var(--signal-selected); }
+:root[data-signal-theme] :is(.channel-button.active svg,.voice-channel.connected svg) { color: var(--signal-heading); }
+:root[data-signal-theme] :is(.icon-btn:hover,.icon-btn.on,.server-icon,.rail-add,.rail-bottom .icon-btn,.sidebar-card button,.secondary,.channel-action,.channel-settings-tabs button:hover,.message-editor-footer button,.message-delete-confirm button,.pinned-messages-summary>button) { background: var(--signal-hover); color: var(--signal-heading); }
+:root[data-signal-theme] :is(.secondary,.channel-action,.sidebar-card button,.rail-bottom .icon-btn):hover:not(:disabled) { background: var(--signal-selected); color: var(--signal-heading); }
+:root[data-signal-theme] :is(.primary,.primary.direct-call-button,.brand-mark,.brand.compact .brand-mark,.auth-icon,.server-icon:hover,.server-icon.selected,.channel-count,.account-orbit,.channel-invitation-symbol,.invitation-inbox-channel-icon,.admin-tag,.message-editor-footer .message-save) { color: #fff; background: var(--signal-accent); }
+:root[data-signal-theme] :is(.primary,.primary.direct-call-button):hover:not(:disabled) { color: #fff; background: var(--signal-accent-hover); }
+:root[data-signal-theme] :is(.brand-dot,.update-heading,.channel-permissions>svg) { color: var(--signal-accent); }
+:root[data-signal-theme] :is(.channel-header,.workspace-heading,.sidebar-call,.sidebar-card,.invitation-link-section,.channel-danger-zone,.pinned-messages-summary,.invitation-inbox-footer,.call-settings-drawer,.call-settings-drawer>header) { border-color: var(--signal-border); }
+:root[data-signal-theme] :is(input,textarea,select,.direct-start .direct-username-field,.channel-invitation-input-wrap,.channel-settings-panel input,.channel-settings-panel textarea,.message-editor textarea) { color: var(--signal-text); background: var(--signal-input); }
+:root[data-signal-theme] :is(input,textarea)::placeholder { color: var(--signal-muted); }
+:root[data-signal-theme] :is(input,select,textarea):focus { border-color: var(--signal-focus); }
+:root[data-signal-theme] :is(button,a,input):focus-visible { outline-color: var(--signal-focus); }
+:root[data-signal-theme] :is(.call-settings,.call-settings-drawer .call-settings) { color: var(--signal-text); background: var(--signal-panel); border-color: var(--signal-border); }
+:root[data-signal-theme] :is(.call-settings h3,.call-settings-drawer>header h2,.call-settings .voice-settings-grid label strong,.call-status h3,.call-alone>span) { color: var(--signal-heading); }
+:root[data-signal-theme] :is(.call-settings label,.call-settings .voice-settings-grid label,.call-settings .voice-switches label,.call-settings label.checkbox-label) { color: var(--signal-text); }
+:root[data-signal-theme] :is(.call-settings .settings-hint,.call-settings p.settings-hint,.call-settings .voice-processing-state,.call-settings-drawer>header span,.call-alone p) { color: var(--signal-muted); }
+:root[data-signal-theme] .call-settings select { color: var(--signal-text); background: var(--signal-input); }
+:root[data-signal-theme] .call-settings .voice-settings { border-color: var(--signal-border); }
+:root[data-signal-theme] .call-settings .voice-preset-buttons button { color: var(--signal-heading); background: var(--signal-hover); }
+:root[data-signal-theme] .call-settings .voice-preset-buttons button:hover:not(:disabled) { background: var(--signal-selected); }
+:root[data-signal-theme] :is(.checkbox-label input,.call-settings .voice-switches input[type=checkbox],input[type=range]) { accent-color: var(--signal-accent); }
+:root[data-signal-theme] .call-settings-drawer>header .icon-btn { color: var(--signal-interactive); background: var(--signal-hover); }
+:root[data-signal-theme] .call-stage { background: var(--signal-deep); }
+:root[data-signal-theme] :is(.call-heading h2,.call-heading .call-count) { color: var(--signal-heading); }
+:root[data-signal-theme] .call-control { color: var(--signal-heading); background: var(--signal-hover); }
+:root[data-signal-theme] .call-control:hover:not(:disabled) { background: var(--signal-selected); }
+:root[data-signal-theme] .call-control.off { color: var(--signal-text); background: var(--signal-selected); }
+:root[data-signal-theme] .call-control.off svg { color: var(--signal-danger); }
+:root[data-signal-theme] .call-control.active { color: #fff; background: var(--signal-accent); }
+:root[data-signal-theme] .call-control.active:hover:not(:disabled) { background: var(--signal-accent-hover); }
+:root[data-signal-theme] .call-control.leave-call { color: #fff; background: #da373c; }
+:root[data-signal-theme] .call-control.leave-call:hover:not(:disabled) { background: #a12828; }
+:root[data-signal-theme] .user-profile-status.online { color: var(--signal-text)!important; }
+:root[data-signal-theme] :is(.channel-settings .channel-settings-help,.channel-danger-zone p,.modal-card .modal-footnote) { color: var(--signal-muted)!important; }
+:root[data-signal-theme] :is(.text-button,.load-more) { color: var(--signal-focus); }
+:root[data-signal-theme] :is(.sidebar-call strong,.direct-live,.account-note svg) { color: var(--signal-success); }
+:root[data-signal-theme] .message-reaction.mine { color: var(--signal-heading); background: var(--signal-accent-soft); border-color: var(--signal-accent); }
+:root[data-signal-theme] .user-profile-avatar { border-color: var(--signal-dock); }
+:root[data-signal-theme] .user-profile-cover { background: var(--signal-accent); }
+:root[data-signal-theme] .member-avatar>.green-dot { border-color: var(--signal-panel); }
+:root[data-signal-theme] .member-row:hover .member-avatar>.green-dot { border-color: var(--signal-hover); }
+:root[data-signal-theme] .desktop-titlebar strong { color: var(--signal-text); }
+:root[data-signal-theme] .desktop-titlebar button:hover { background: var(--signal-hover); }
+:root[data-signal-theme] .desktop-titlebar button.window-close:hover { color: #fff; background: #da373c; }
+:root[data-signal-theme] .direct-pending-notice { background: var(--signal-accent-soft); color: var(--signal-text); }
+:root[data-signal-theme] .message-history { scrollbar-color: var(--signal-deep) var(--signal-panel); }
+:root[data-signal-theme] .sidebar-scroll { scrollbar-color: var(--signal-deep) transparent; }
+
+.theme-menu { position: relative; display: flex; flex: 0 0 auto; }
+.user-panel>.theme-menu,.user-panel>.personal-audio-controls { flex: 0 0 auto; min-width: 0; }
+.theme-menu-toggle { display: inline-flex; justify-content: center; align-items: center; cursor: pointer; }
+.theme-menu-popup { position: fixed; z-index: 180; width: 300px; max-width: calc(100vw - 16px); max-height: min(440px,calc(100dvh - 80px)); overflow-y: auto; overscroll-behavior: contain; background: var(--signal-panel,#2b2d31); color: var(--signal-text,#dbdee1); border: 1px solid var(--signal-border,#45474e); border-radius: 10px; box-shadow: 0 12px 42px #0006; padding: 16px; animation: theme-menu-enter 140ms ease-out; }
+.theme-menu-popup>header { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 16px; }
+.theme-menu-popup>header h2 { display: flex; align-items: center; gap: 9px; margin: 0; color: var(--signal-heading,#f2f3f5); font-size: 15px; font-weight: 600; }
+.theme-menu-popup>header .icon-btn { display: grid; place-items: center; height: 26px; width: 26px; color: var(--signal-interactive,#b5bac1); background: transparent; }
+.theme-menu-popup>header .icon-btn:hover { background: var(--signal-hover,#35373c); }
+.theme-menu-popup fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }
+.theme-menu-popup legend { font-size: 11px; font-weight: 600; color: var(--signal-muted,#a1a6af); margin-bottom: 10px; padding: 0; }
+.theme-choice-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 8px; }
+.theme-menu-popup .theme-choice { position: relative; display: flex; flex-direction: column; align-items: stretch; gap: 7px; padding: 7px; margin: 0; border: 1px solid transparent; border-radius: 6px; color: var(--signal-text,#dbdee1); background: var(--signal-hover,#35373c); cursor: pointer; font-size: 12px; font-weight: 500; }
+.theme-menu-popup .theme-choice:hover { background: var(--signal-selected,#404249); }
+.theme-menu-popup .theme-choice.selected { border-color: var(--signal-accent,#5865f2); background: var(--signal-accent-soft,#5865f226); }
+.theme-choice input { position: absolute; opacity: 0; width: 1px; height: 1px; padding: 0; }
+.theme-choice:has(input:focus-visible) { outline: 2px solid var(--signal-focus,#00a8fc); outline-offset: 2px; }
+.theme-choice-preview { position: relative; display: block; height: 44px; overflow: hidden; border-radius: 4px; border: 1px solid #ffffff20; }
+.theme-choice-preview>i { position: absolute; inset: 0 auto 0 0; width: 28%; }
+.theme-choice-preview>b { position: absolute; left: 38%; top: 14px; right: 14px; height: 7px; border-radius: 3px; }
+.theme-choice-preview>svg { position: absolute; top: 3px; right: 3px; padding: 2px; width: 20px; height: 20px; border-radius: 50%; background: #15171b; color: #fff; }
+.theme-menu-popup>p { margin: 14px 0 0; color: var(--signal-muted,#a1a6af); font-size: 11px; line-height: 1.5; }
+.personal-audio-controls { display: flex; align-items: center; gap: 0; }
+.personal-audio-button { display: grid; place-items: center; width: 28px; height: 32px; border: 0; padding: 0; border-radius: 4px; background: transparent; color: var(--signal-muted,#949ba4); cursor: pointer; transition: color 120ms,background-color 120ms; }
+.personal-audio-button.enabled { color: var(--signal-heading,#f2f3f5); }
+.personal-audio-button.muted { color: var(--signal-danger,#fa777c); }
+.personal-audio-button:hover:not(:disabled) { background: var(--signal-selected,#404249); }
+.personal-audio-button:disabled { color: var(--signal-muted,#949ba4); opacity: .38; background: transparent; cursor: not-allowed; }
+.personal-audio-controls.connected .personal-audio-button:disabled { opacity: .65; cursor: wait; }
+@keyframes theme-menu-enter { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+@media (prefers-reduced-motion:reduce) { .theme-menu-popup { animation: none; } .personal-audio-button { transition: none; } }

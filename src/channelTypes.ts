@@ -6,6 +6,8 @@ export type Channel = {
   role:'owner'|'admin'|'member';
   kind?:'channel'|'direct';
   maxParticipants?:number;
+  workspaceId?:string;
+  channelType?:'text'|'voice'|'direct';
   peer?:{id:string;username:string};
 };
 

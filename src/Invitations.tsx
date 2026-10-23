@@ -5,7 +5,7 @@ import './invitations.css';
 
 export type Invitation = {
   id: string;
-  channel: { id: string; name: string; description: string; kind?: 'channel' | 'direct'; maxParticipants?: number };
+  channel: { id: string; name: string; description: string; kind?: 'channel' | 'direct'; workspaceId?: string | null; maxParticipants?: number };
   inviter: { id: string; username: string };
   createdAt: string;
   expiresAt: string;
@@ -71,7 +71,7 @@ export function ChannelInvitationForm({ channelId, channelName, onError }: Chann
   return <form className="channel-invitation-form" onSubmit={submit} aria-busy={busy}>
     <div className="channel-invitation-heading">
       <span className="channel-invitation-symbol" aria-hidden="true"><AtSign size={18} /></span>
-      <div><h3>Пригласить по никнейму</h3><p>В канал <strong>#{channelName}</strong></p></div>
+      <div><h3>Пригласить по никнейму</h3><p>Через канал <strong>#{channelName}</strong></p></div>
     </div>
     <label className="channel-invitation-label" htmlFor={fieldId}>Никнейм</label>
     <div className="channel-invitation-input-row">
@@ -98,7 +98,7 @@ export function ChannelInvitationForm({ channelId, channelName, onError }: Chann
         {busy ? 'Отправляем…' : 'Пригласить'}
       </button>
     </div>
-    <p id={`${fieldId}-help`} className="channel-invitation-help">Укажите никнейм, выбранный при регистрации. Получатель сам примет или отклонит приглашение.</p>
+    <p id={`${fieldId}-help`} className="channel-invitation-help">Получатель сам примет или отклонит приглашение. После принятия ему будут доступны текстовые и голосовые каналы этого сервера.</p>
     {sentTo && <p className="channel-invitation-success" role="status">
       <CheckCircle2 size={17} aria-hidden="true" />
       <span>Приглашение для <strong>@{sentTo}</strong> отправлено.</span>
@@ -152,7 +152,7 @@ export function Inbox({ invitations, onRespond, onClose, busyId }: InboxProps) {
     {invitations.length === 0 ? <div className="invitation-inbox-empty">
       <span className="invitation-inbox-empty-icon" aria-hidden="true"><InboxIcon size={28} /></span>
       <h3>Пока нет приглашений</h3>
-      <p>Приглашения по никнейму появятся здесь. Вы сами решаете, вступать ли в канал или начинать личный разговор.</p>
+      <p>Приглашения по никнейму появятся здесь. Вы сами решаете, вступать ли на сервер или начинать личный разговор.</p>
     </div> : <>
       <p className="invitation-inbox-intro">Принимайте приглашения от тех, с кем хотите общаться.</p>
       <ul className="invitation-inbox-list">
@@ -164,11 +164,12 @@ export function Inbox({ invitations, onRespond, onClose, busyId }: InboxProps) {
             <div className="invitation-inbox-card-heading">
               <span className="invitation-inbox-channel-icon" aria-hidden="true">{direct ? <MessageSquare size={20} /> : <Hash size={20} />}</span>
               <div className="invitation-inbox-channel-info">
-                <h3>{direct ? `Разговор с @${invitation.inviter.username}` : `#${invitation.channel.name}`}</h3>
+                <h3>{direct ? `Разговор с @${invitation.inviter.username}` : invitation.channel.workspaceId ? `Сервер «${invitation.channel.name}»` : `#${invitation.channel.name}`}</h3>
                 <p>{direct ? 'Личный канал для вас двоих' : <>Приглашает <strong>@{invitation.inviter.username}</strong></>}</p>
               </div>
             </div>
             {direct ? <p className="invitation-inbox-description">Переписка, голос, видео и экран. Собеседник получит доступ к разговору с вами, когда вы примете приглашение.</p> : invitation.channel.description && <p className="invitation-inbox-description">{invitation.channel.description}</p>}
+            {!direct && invitation.channel.workspaceId && <p className="invitation-inbox-description">Принимая приглашение, вы вступаете на сервер и получаете доступ к его текстовым и голосовым каналам.</p>}
             <p className="invitation-inbox-expiry"><time dateTime={invitation.expiresAt}>{expirationLabel(invitation.expiresAt)}</time></p>
             {unavailable ? <span className="invitation-inbox-state">{unavailable}</span> : <div className="invitation-inbox-actions">
               <button type="button" className="primary" disabled={busy} onClick={() => { void respond(invitation.id, 'accept'); }}>

@@ -1,7 +1,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 
 export function openDatabase(dataDir) {
   mkdirSync(dataDir, { recursive: true, mode: 0o700 });
@@ -197,6 +197,93 @@ export function migratePrivateCalls(db, now = Date.now()) {
       const seed = db.prepare('INSERT OR IGNORE INTO channel_media_keys (channel_id, key, epoch, reset_pending) VALUES (?, ?, 1, 1)');
       for (const channel of db.prepare('SELECT id FROM channels').all()) seed.run(channel.id, randomBytes(32).toString('base64url'));
       db.prepare('INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)').run('private-calls-e2ee-v1', now);
+    }
+    db.exec('COMMIT');
+  } catch (error) { db.exec('ROLLBACK'); throw error; }
+}
+
+// Every legacy conversation becomes its own workspace. Membership is copied
+// from that conversation only, so unrelated private groups never become peers.
+export function migrateCommunities(db, now = Date.now()) {
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    if (!db.prepare('SELECT 1 FROM schema_migrations WHERE version = ?').get('workspaces-friends-v1')) {
+      db.exec(`
+        CREATE TABLE workspaces (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          description TEXT NOT NULL DEFAULT '',
+          owner_id TEXT NOT NULL REFERENCES users(id),
+          created_at INTEGER NOT NULL
+        );
+        CREATE TABLE workspace_memberships (
+          workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+          user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          role TEXT NOT NULL CHECK (role IN ('owner', 'admin', 'member')),
+          joined_at INTEGER NOT NULL,
+          PRIMARY KEY (workspace_id, user_id)
+        );
+        CREATE TABLE workspace_bans (
+          workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+          user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          banned_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+          target_role TEXT NOT NULL DEFAULT 'member' CHECK (target_role IN ('admin', 'member')),
+          created_at INTEGER NOT NULL,
+          PRIMARY KEY (workspace_id, user_id)
+        );
+        ALTER TABLE channels ADD COLUMN workspace_id TEXT REFERENCES workspaces(id) ON DELETE CASCADE;
+        ALTER TABLE channels ADD COLUMN channel_type TEXT NOT NULL DEFAULT 'text' CHECK (channel_type IN ('text', 'voice'));
+        ALTER TABLE channels ADD COLUMN label TEXT;
+        ALTER TABLE channels ADD COLUMN legacy_voice_compatible INTEGER NOT NULL DEFAULT 0;
+        CREATE INDEX channels_workspace ON channels(workspace_id, created_at);
+        CREATE INDEX workspace_memberships_user ON workspace_memberships(user_id, workspace_id);
+        CREATE TABLE friend_requests (
+          id TEXT PRIMARY KEY,
+          sender_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          recipient_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          status TEXT NOT NULL CHECK (status IN ('pending', 'accepted', 'declined', 'cancelled')),
+          created_at INTEGER NOT NULL,
+          responded_at INTEGER,
+          CHECK (sender_id <> recipient_id)
+        );
+        CREATE UNIQUE INDEX friend_requests_pending_pair ON friend_requests(
+          CASE WHEN sender_id < recipient_id THEN sender_id ELSE recipient_id END,
+          CASE WHEN sender_id < recipient_id THEN recipient_id ELSE sender_id END
+        ) WHERE status = 'pending';
+        CREATE TABLE friendships (
+          first_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          second_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          created_at INTEGER NOT NULL,
+          PRIMARY KEY (first_user_id, second_user_id),
+          CHECK (first_user_id < second_user_id)
+        );
+        CREATE TABLE direct_calls (
+          id TEXT PRIMARY KEY,
+          channel_id TEXT NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+          caller_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          recipient_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          status TEXT NOT NULL CHECK (status IN ('pending', 'accepted', 'declined', 'cancelled', 'ended', 'expired')),
+          created_at INTEGER NOT NULL,
+          expires_at INTEGER NOT NULL,
+          responded_at INTEGER,
+          CHECK (caller_id <> recipient_id)
+        );
+        CREATE INDEX direct_calls_recipient ON direct_calls(recipient_id, status, expires_at);
+        CREATE INDEX friend_requests_recipient ON friend_requests(recipient_id, status);
+        CREATE INDEX friend_requests_sender ON friend_requests(sender_id, status);
+      `);
+      for (const channel of db.prepare("SELECT * FROM channels WHERE kind = 'channel'").all()) {
+        db.prepare('INSERT INTO workspaces (id, name, description, owner_id, created_at) VALUES (?, ?, ?, ?, ?)').run(channel.id, channel.name, channel.description, channel.owner_id, channel.created_at);
+        db.prepare('INSERT INTO workspace_memberships (workspace_id, user_id, role, joined_at) SELECT ?, user_id, role, joined_at FROM memberships WHERE channel_id = ?').run(channel.id, channel.id);
+        db.prepare('INSERT INTO workspace_bans (workspace_id, user_id, banned_by, target_role, created_at) SELECT ?, user_id, banned_by, target_role, created_at FROM channel_bans WHERE channel_id = ?').run(channel.id, channel.id);
+        db.prepare("UPDATE channels SET workspace_id = ?, label = name, legacy_voice_compatible = 1 WHERE id = ?").run(channel.id, channel.id);
+        const voiceId = randomUUID();
+        db.prepare("INSERT INTO channels (id, name, label, description, owner_id, kind, workspace_id, channel_type, created_at) VALUES (?, ?, ?, ?, ?, 'channel', ?, 'voice', ?)").run(voiceId, `channel:${voiceId}`, 'Общий', channel.description, channel.owner_id, channel.id, Number(channel.created_at) + 1);
+        db.prepare('INSERT INTO memberships (channel_id, user_id, role, muted, joined_at) SELECT ?, user_id, role, muted, joined_at FROM memberships WHERE channel_id = ?').run(voiceId, channel.id);
+        db.prepare('INSERT INTO channel_bans (channel_id, user_id, banned_by, target_role, created_at) SELECT ?, user_id, banned_by, target_role, created_at FROM channel_bans WHERE channel_id = ?').run(voiceId, channel.id);
+        db.prepare('INSERT INTO channel_media_keys (channel_id, key, epoch, reset_pending) VALUES (?, ?, 1, 0)').run(voiceId, randomBytes(32).toString('base64url'));
+      }
+      db.prepare('INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)').run('workspaces-friends-v1', now);
     }
     db.exec('COMMIT');
   } catch (error) { db.exec('ROLLBACK'); throw error; }

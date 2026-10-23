@@ -6,7 +6,8 @@ import { promisify } from 'node:util';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { existsSync, readFileSync } from 'node:fs';
-import { openDatabase, publicUser, migrateChannelMemberships, migrateDirectInvitations, migrateChannelModeration, migratePrivateCalls } from './database.mjs';
+import { openDatabase, publicUser, migrateChannelMemberships, migrateDirectInvitations, migrateChannelModeration, migratePrivateCalls, migrateCommunities } from './database.mjs';
+import { createCommunityService } from './community.mjs';
 import { createMedia, MAX_PARTICIPANTS } from './media.mjs';
 import { installModerationRoutes } from './moderation.mjs';
 import { installMessageTools, messageExtras } from './message-tools.mjs';
@@ -76,6 +77,7 @@ export async function createApp(options = {}) {
     migrateDirectInvitations(db, clock());
     migrateChannelModeration(db, clock());
     migratePrivateCalls(db, clock());
+    migrateCommunities(db, clock());
   } catch (error) { db.close(); throw error; }
 
   let dummyHash, media;
@@ -91,6 +93,7 @@ export async function createApp(options = {}) {
   server.headersTimeout = 25_000;
   const wss = new WebSocketServer({ noServer: true, maxPayload: 4096, perMessageDeflate: false });
   const sockets = new Map();
+  let communities;
   const rateBuckets = new Map();
   const connectOrigins = new Set(["'self'"]);
   if (appOrigin) connectOrigins.add(appOrigin.replace(/^http/, 'ws'));
@@ -116,15 +119,17 @@ export async function createApp(options = {}) {
     if (++bucket.count > limit) throw new HttpError(429, 'Слишком много запросов. Попробуйте позже.');
   }
 
-  const selectMemberChannel = `SELECT channels.id, channels.name, channels.description, channels.kind, channels.owner_id AS ownerId, memberships.role, memberships.muted
+  const selectMemberChannel = `SELECT channels.id, COALESCE(channels.label, channels.name) AS name, channels.description, channels.kind, channels.workspace_id AS workspaceId, channels.channel_type AS channelType, channels.legacy_voice_compatible AS legacyVoiceCompatible, channels.owner_id AS ownerId, memberships.role, memberships.muted
     FROM channels JOIN memberships ON memberships.channel_id = channels.id`;
-  const channelBanFilter = 'NOT EXISTS (SELECT 1 FROM channel_bans WHERE channel_bans.channel_id = channels.id AND channel_bans.user_id = memberships.user_id)';
+  const channelBanFilter = `NOT EXISTS (SELECT 1 FROM channel_bans WHERE channel_bans.channel_id = channels.id AND channel_bans.user_id = memberships.user_id)
+    AND (channels.workspace_id IS NULL OR (EXISTS (SELECT 1 FROM workspace_memberships WHERE workspace_id = channels.workspace_id AND user_id = memberships.user_id)
+      AND NOT EXISTS (SELECT 1 FROM workspace_bans WHERE workspace_id = channels.workspace_id AND user_id = memberships.user_id)))`;
   function channelDto(channel, userId) {
     if (channel.kind !== 'direct') return { ...channel, kind: 'channel', maxParticipants: MAX_PARTICIPANTS, muted: Boolean(channel.muted) };
     const pair = db.prepare('SELECT first_user_id, second_user_id FROM direct_conversations WHERE channel_id = ?').get(channel.id);
     if (!pair || ![pair.first_user_id, pair.second_user_id].includes(userId)) throw new HttpError(404, 'Канал не найден.');
     const peer = db.prepare('SELECT id, username FROM users WHERE id = ?').get(pair.first_user_id === userId ? pair.second_user_id : pair.first_user_id);
-    return { ...channel, name: peer.username, description: 'Личный разговор', ownerId: null, role: 'member', muted: false, maxParticipants: 2, peer };
+    return { ...channel, name: peer.username, description: 'Личный разговор', workspaceId: null, channelType: 'direct', ownerId: null, role: 'member', muted: false, maxParticipants: 2, peer };
   }
   const listChannels = (userId) => db.prepare(`${selectMemberChannel} WHERE memberships.user_id = ? AND ${channelBanFilter} ORDER BY channels.created_at, channels.id`).all(userId).map((channel) => channelDto(channel, userId));
   const getChannel = (id, userId) => {
@@ -163,22 +168,23 @@ export async function createApp(options = {}) {
   async function drainMediaResets() {
     await Promise.allSettled(db.prepare('SELECT channel_id FROM channel_media_keys WHERE reset_pending = 1 LIMIT 100').all().map((row) => resetMediaRoom(row.channel_id)));
   }
-  const isBanned = (channelId, userId) => Boolean(db.prepare('SELECT 1 FROM channel_bans WHERE channel_id = ? AND user_id = ?').get(channelId, userId));
+  const isBanned = (channelId, userId) => Boolean(db.prepare(`SELECT 1 FROM channel_bans WHERE channel_id = ? AND user_id = ?
+    UNION ALL SELECT 1 FROM workspace_bans JOIN channels ON channels.workspace_id = workspace_bans.workspace_id WHERE channels.id = ? AND workspace_bans.user_id = ? LIMIT 1`).get(channelId, userId, channelId, userId));
   const assertNotBanned = (channelId, userId) => { if (isBanned(channelId, userId)) throw new HttpError(403, 'Доступ в этот канал заблокирован.'); };
-  const hasMembership = (channelId, userId) => !isBanned(channelId, userId) && Boolean(db.prepare('SELECT 1 FROM memberships WHERE channel_id = ? AND user_id = ?').get(channelId, userId));
-  const listMembers = (channelId) => db.prepare(`SELECT users.id, users.username, memberships.role, memberships.muted FROM users JOIN memberships ON memberships.user_id = users.id WHERE memberships.channel_id = ? AND NOT EXISTS (SELECT 1 FROM channel_bans WHERE channel_bans.channel_id = memberships.channel_id AND channel_bans.user_id = users.id) ORDER BY CASE memberships.role WHEN 'owner' THEN 0 WHEN 'admin' THEN 1 ELSE 2 END, users.username COLLATE NOCASE, users.id`).all(channelId).map((member) => ({ ...member, muted: Boolean(member.muted) }));
+  const hasMembership = (channelId, userId) => Boolean(db.prepare(`${selectMemberChannel} WHERE channels.id = ? AND memberships.user_id = ? AND ${channelBanFilter}`).get(channelId, userId));
+  const listMembers = (channelId) => db.prepare(`SELECT users.id, users.username, memberships.role, memberships.muted FROM users JOIN memberships ON memberships.user_id = users.id JOIN channels ON channels.id = memberships.channel_id WHERE memberships.channel_id = ? AND ${channelBanFilter} ORDER BY CASE memberships.role WHEN 'owner' THEN 0 WHEN 'admin' THEN 1 ELSE 2 END, users.username COLLATE NOCASE, users.id`).all(channelId).map((member) => ({ ...member, muted: Boolean(member.muted) }));
   const getInvite = (code) => {
     if (typeof code !== 'string' || !/^[a-zA-Z0-9_-]{32}$/.test(code)) throw new HttpError(404, 'Приглашение не найдено.');
-    const invite = db.prepare(`SELECT invites.*, channels.name AS channel_name FROM invites JOIN channels ON channels.id = invites.channel_id WHERE invites.code_hash = ? AND channels.kind = 'channel'`).get(tokenHash(code));
+    const invite = db.prepare(`SELECT invites.*, COALESCE(workspaces.name, channels.label, channels.name) AS channel_name, channels.workspace_id FROM invites JOIN channels ON channels.id = invites.channel_id LEFT JOIN workspaces ON workspaces.id = channels.workspace_id WHERE invites.code_hash = ? AND channels.kind = 'channel'`).get(tokenHash(code));
     if (!invite) throw new HttpError(404, 'Приглашение не найдено.');
     return invite;
   };
-  const selectInvitation = `SELECT channel_invitations.*, channels.name AS channel_name, channels.description AS channel_description, channels.kind AS channel_kind, users.username AS inviter_username
-    FROM channel_invitations JOIN channels ON channels.id = channel_invitations.channel_id JOIN users ON users.id = channel_invitations.created_by`;
+  const selectInvitation = `SELECT channel_invitations.*, COALESCE(workspaces.name, channels.label, channels.name) AS channel_name, COALESCE(workspaces.description, channels.description) AS channel_description, channels.workspace_id, channels.kind AS channel_kind, users.username AS inviter_username
+    FROM channel_invitations JOIN channels ON channels.id = channel_invitations.channel_id LEFT JOIN workspaces ON workspaces.id = channels.workspace_id JOIN users ON users.id = channel_invitations.created_by`;
   function publicInvitation(row) {
     return {
       id: row.id,
-      channel: { id: row.channel_id, name: row.channel_kind === 'direct' ? row.inviter_username : row.channel_name, description: row.channel_kind === 'direct' ? 'Личный разговор' : row.channel_description, kind: row.channel_kind, maxParticipants: row.channel_kind === 'direct' ? 2 : MAX_PARTICIPANTS },
+      channel: { id: row.channel_id, name: row.channel_kind === 'direct' ? row.inviter_username : row.channel_name, description: row.channel_kind === 'direct' ? 'Личный разговор' : row.channel_description, kind: row.channel_kind, workspaceId: row.workspace_id, maxParticipants: row.channel_kind === 'direct' ? 2 : MAX_PARTICIPANTS },
       inviter: { id: row.created_by, username: row.inviter_username },
       createdAt: new Date(Number(row.created_at)).toISOString(),
       expiresAt: new Date(Number(row.expires_at)).toISOString(),
@@ -219,6 +225,7 @@ export async function createApp(options = {}) {
     for (const [ws, client] of sockets) if (!userId || client.user.id === userId) {
       sendClient(ws, client, { type: 'channels', channels: listChannels(client.user.id) });
     }
+    communities?.broadcastWorkspaces(userId);
   }
   function broadcastInvitations(userId) {
     for (const [ws, client] of sockets) if (client.user.id === userId) sendClient(ws, client, { type: 'invitations', invitations: listInvitations(userId) });
@@ -244,13 +251,16 @@ export async function createApp(options = {}) {
     for (const [ws, client] of sockets) {
       const visible = new Set(db.prepare(`SELECT DISTINCT other.user_id AS id FROM memberships own JOIN memberships other ON other.channel_id = own.channel_id WHERE own.user_id = ? AND NOT EXISTS (SELECT 1 FROM channel_bans WHERE channel_bans.channel_id = own.channel_id AND channel_bans.user_id IN (own.user_id, other.user_id))`).all(client.user.id).map((row) => row.id));
       visible.add(client.user.id);
+      for (const friend of communities?.listFriends(client.user.id).friends || []) visible.add(friend.id);
       sendClient(ws, client, { type: 'presence', online: online.filter((user) => visible.has(user.id)) });
     }
+    communities?.broadcastFriends();
   }
   function messageFromRow(row) {
     return { id: Number(row.id), channelId: row.channel_id, content: row.content, createdAt: new Date(Number(row.created_at)).toISOString(), user: { id: row.user_id, username: row.username, displayName: row.username, role: row.role }, ...messageExtras(db, row.id) };
   }
   const selectMessage = 'SELECT messages.*, users.username, users.role FROM messages JOIN users ON users.id = messages.user_id';
+  communities = createCommunityService({ app, db, clock, HttpError, requireAuth, enforceRate, sockets, sendClient, getChannel, listChannels, broadcastChannels, broadcastPresence, broadcastInvitations, rotateMediaKey, resetMediaRoom });
 
   app.use((req, res, next) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -332,19 +342,8 @@ export async function createApp(options = {}) {
   app.get('/api/channels', requireAuth, (req, res) => res.json({ channels: listChannels(req.auth.user.id) }));
   app.post('/api/channels', requireAuth, (req, res) => {
     enforceRate(`channels:${req.auth.user.id}`, 10, 60_000);
-    const { name, description = '' } = req.body || {};
-    if (typeof name !== 'string' || !name.trim() || name.trim().length > 40 || typeof description !== 'string' || description.trim().length > 180) throw new HttpError(400, 'Название: 1–40 символов, описание: до 180 символов.');
-    if (db.prepare('SELECT id FROM channels WHERE name = ?').get(name.trim())) throw new HttpError(409, 'Канал с таким названием уже существует.');
-    const channel = { id: randomUUID(), name: name.trim(), description: description.trim(), ownerId: req.auth.user.id, role: 'owner', muted: false, kind: 'channel', maxParticipants: MAX_PARTICIPANTS };
-    db.exec('BEGIN IMMEDIATE');
-    try {
-      db.prepare('INSERT INTO channels (id, name, description, created_at, owner_id) VALUES (?, ?, ?, ?, ?)').run(channel.id, channel.name, channel.description, clock(), channel.ownerId);
-      db.prepare("INSERT INTO memberships (channel_id, user_id, role, joined_at) VALUES (?, ?, 'owner', ?)").run(channel.id, req.auth.user.id, clock());
-      db.exec('COMMIT');
-    } catch (error) { db.exec('ROLLBACK'); throw error; }
-    broadcastChannels(req.auth.user.id);
-    broadcastPresence();
-    res.status(201).json({ channel });
+    const result = communities.createWorkspace(req.auth.user.id, req.body);
+    res.status(201).json({ ...result, channel: result.channels.find((channel) => channel.channelType === 'text') });
   });
   app.post('/api/direct-channels', requireAuth, (req, res) => {
     enforceRate(`direct-channels:${req.auth.user.id}`, 20, 60_000);
@@ -354,6 +353,16 @@ export async function createApp(options = {}) {
     const recipient = db.prepare('SELECT id, username FROM users WHERE username = ?').get(username);
     if (!recipient) throw new HttpError(404, 'Пользователь не найден.');
     if (recipient.id === userId) throw new HttpError(400, 'Нельзя создать личный разговор с собой.');
+    if (communities.areFriends(userId, recipient.id)) {
+      db.exec('BEGIN IMMEDIATE');
+      let conversation;
+      try { conversation = communities.ensureFriendConversation(userId, recipient.id); db.exec('COMMIT'); }
+      catch (error) { db.exec('ROLLBACK'); throw error; }
+      broadcastChannels(userId); broadcastChannels(recipient.id);
+      broadcastInvitations(userId); broadcastInvitations(recipient.id); broadcastPresence();
+      if (conversation.changed) void resetMediaRoom(conversation.channelId);
+      return res.json({ channel: getChannel(conversation.channelId, userId), invitation: null, requiresAcceptance: false });
+    }
     const [firstId, secondId] = [userId, recipient.id].sort();
     let channelId, invitationId, incoming = false, created = false, membershipChanged = false;
     db.exec('BEGIN IMMEDIATE');
@@ -445,8 +454,7 @@ export async function createApp(options = {}) {
             const pair = db.prepare('SELECT first_user_id, second_user_id FROM direct_conversations WHERE channel_id = ?').get(row.channel_id);
             if (!pair || ![pair.first_user_id, pair.second_user_id].includes(req.auth.user.id) || ![pair.first_user_id, pair.second_user_id].includes(row.created_by)) throw new HttpError(403, 'Это приглашение не предназначено для вашего аккаунта.');
           }
-          membershipChanged = db.prepare("INSERT OR IGNORE INTO memberships (channel_id, user_id, role, joined_at) VALUES (?, ?, 'member', ?)").run(row.channel_id, req.auth.user.id, clock()).changes === 1;
-          if (membershipChanged) rotateMediaKey(row.channel_id);
+          membershipChanged = communities.grantMembership(row.channel_id, req.auth.user.id);
         }
         db.prepare('UPDATE channel_invitations SET status = ?, responded_at = ? WHERE id = ?').run(decision, clock(), row.id);
       }
@@ -457,7 +465,7 @@ export async function createApp(options = {}) {
     if (decision === 'accepted') {
       broadcastChannels();
       broadcastPresence();
-      if (membershipChanged) await resetMediaRoom(row.channel_id);
+      if (membershipChanged) await communities.resetMembershipRooms(row.channel_id);
       return res.json({ invitation: publicInvitation(row), channel: getChannel(row.channel_id, req.auth.user.id) });
     }
     res.json({ invitation: publicInvitation(row) });
@@ -489,16 +497,14 @@ export async function createApp(options = {}) {
       if (!hasMembership(invite.channel_id, req.auth.user.id)) {
         const update = db.prepare('UPDATE invites SET uses = uses + 1 WHERE code_hash = ? AND expires_at > ? AND uses < max_uses').run(invite.code_hash, clock());
         if (update.changes !== 1) throw new HttpError(400, 'Приглашение истекло или уже использовано.');
-        db.prepare("INSERT INTO memberships (channel_id, user_id, role, joined_at) VALUES (?, ?, 'member', ?)").run(invite.channel_id, req.auth.user.id, clock());
-        rotateMediaKey(invite.channel_id);
-        membershipChanged = true;
+        membershipChanged = communities.grantMembership(invite.channel_id, req.auth.user.id);
       }
       db.exec('COMMIT');
     } catch (error) { db.exec('ROLLBACK'); throw error; }
     const channel = getChannel(invite.channel_id, req.auth.user.id);
     broadcastChannels(req.auth.user.id);
     broadcastPresence();
-    if (membershipChanged) await resetMediaRoom(invite.channel_id);
+    if (membershipChanged) await communities.resetMembershipRooms(invite.channel_id);
     res.json({ channel });
   });
   app.get('/api/channels/:id/messages', requireAuth, (req, res) => {
@@ -522,6 +528,7 @@ export async function createApp(options = {}) {
   });
   app.post('/api/channels/:id/join', requireAuth, async (req, res) => {
     const channel = getChannel(req.params.id, req.auth.user.id);
+    if (channel.channelType === 'text' && !channel.legacyVoiceCompatible) throw new HttpError(400, 'Для звонка выберите голосовой канал.');
     enforceRate(`join:${req.auth.user.id}`, 20, 60_000);
     if (req.body?.encryptionVersion !== 1) throw new HttpError(426, 'Обновите приложение или страницу: для звонков требуется поддержка шифрования версии 1.');
     if (!media.configured) throw new HttpError(503, 'Голос и видео ещё не настроены. Администратору нужно указать параметры LiveKit.');
@@ -564,7 +571,8 @@ export async function createApp(options = {}) {
     }
     catch (error) { if (error instanceof HttpError) throw error; throw new HttpError(503, 'Не удалось получить состояние медиасервера. Проверьте LiveKit.'); }
   });
-  const moderationRoutes = installModerationRoutes(app, { db, clock, media, HttpError, requireAuth, sessionUser, getChannel, listMembers, broadcastChannels, broadcastInvitations, broadcastPresence, notifyModeration, rotateMediaKey, resetMediaRoom });
+  communities.installRoutes();
+  const moderationRoutes = installModerationRoutes(app, { db, clock, media, HttpError, requireAuth, sessionUser, getChannel, listMembers, broadcastChannels, broadcastInvitations, broadcastPresence, notifyModeration, rotateMediaKey, resetMediaRoom, scopedChannelIds: communities.scopedChannelIds });
   installMessageTools({ app, db, requireAuth, getChannel, clock, broadcastToChannel, HttpError });
   app.use('/api', (req, res) => res.status(404).json({ error: 'Метод API не найден.' }));
 
@@ -607,6 +615,9 @@ export async function createApp(options = {}) {
     ws.on('close', () => { sockets.delete(ws); broadcastPresence(); });
     sendClient(ws, auth, { type: 'channels', channels: listChannels(auth.user.id) });
     sendClient(ws, auth, { type: 'invitations', invitations: listInvitations(auth.user.id) });
+    sendClient(ws, auth, { type: 'workspaces', workspaces: communities.listWorkspaces(auth.user.id) });
+    sendClient(ws, auth, { type: 'friends', ...communities.listFriends(auth.user.id) });
+    sendClient(ws, auth, { type: 'direct-calls', calls: communities.listCalls(auth.user.id) });
     broadcastPresence();
   });
   const heartbeat = setInterval(() => {
@@ -628,6 +639,7 @@ export async function createApp(options = {}) {
     closed = true;
     clearInterval(heartbeat);
     clearInterval(mediaResetTimer);
+    communities.close();
     for (const ws of sockets.keys()) ws.terminate();
     await new Promise((resolveClose) => wss.close(resolveClose));
     if (server.listening) await new Promise((resolveClose) => server.close(resolveClose));
