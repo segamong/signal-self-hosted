@@ -1,0 +1,48 @@
+.call-notification-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 20px 0;
+  padding: 18px;
+  border: 1px solid var(--signal-border, #3f4147);
+  border-radius: 10px;
+  background: var(--signal-panel, #2b2d31);
+  color: var(--signal-text, #f2f3f5);
+}
+.call-notification-settings h3 { margin: 0 0 4px; font-size: 16px; color: var(--signal-heading, #f2f3f5); }
+.call-notification-settings .checkbox-label {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  margin: 0;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.call-notification-settings input[type="checkbox"] {
+  flex: 0 0 18px;
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: var(--signal-accent, #5865f2);
+}
+.call-notification-settings p { margin: 0; font-size: 13px; line-height: 1.5; }
+.call-notification-settings .settings-help,
+:root[data-signal-theme] .call-notification-settings .settings-help { color: var(--signal-muted, #b5bac1); }
+.call-notification-settings .button {
+  align-self: flex-start;
+  max-width: 100%;
+  min-height: 36px;
+  padding: 8px 14px;
+  border: 1px solid var(--signal-border, #41434a);
+  border-radius: 5px;
+  background: var(--signal-deep, #232428);
+  color: var(--signal-text, #f2f3f5);
+  white-space: normal;
+  text-align: left;
+}
+.call-notification-settings .button:focus-visible,
+.call-notification-settings input:focus-visible { outline: 2px solid var(--signal-accent, #5865f2); outline-offset: 3px; }
+.call-notification-settings .button:disabled { opacity: .5; cursor: default; }

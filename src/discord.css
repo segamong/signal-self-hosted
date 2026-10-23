@@ -237,7 +237,7 @@ label { color: #b5bac1; font-size: 12px; font-weight: 700; gap: 8px; }
 .members-footer { display: none; }
 
 /* Voice room, with the active stream and a separate participant strip. */
-.call-stage { padding: 16px 20px 12px; background: #1e1f22; border-bottom: 1px solid #141518; max-height: 72vh; max-height: 72dvh; min-height: 280px; scrollbar-color: #111214 transparent; container-type: inline-size; container-name: call; }
+.call-stage { padding: 16px 20px 12px; background: var(--signal-call-bg, #1e1f22); border-bottom: 1px solid var(--signal-border, #141518); max-height: 72vh; max-height: 72dvh; min-height: 280px; scrollbar-color: #111214 transparent; container-type: inline-size; container-name: call; }
 .call-heading { margin-bottom: 14px; gap: 12px; }
 .call-heading h2 { color: #f2f3f5; font-size: 18px; font-weight: 600; margin-top: 5px; }
 .call-connection { color: #949ba4; font-size: 11px; gap: 5px; }
@@ -287,8 +287,8 @@ label { color: #b5bac1; font-size: 12px; font-weight: 700; gap: 8px; }
 .share-switcher button { border-radius: 3px; background: #35373c; color: #b5bac1; padding: 5px 8px; font-size: 12px; }
 .share-switcher button:hover { color: #f2f3f5; background: #404249; }
 .share-switcher button.active { color: #fff; background: #5865f2; }
-.call-toolbar { position: sticky; bottom: -12px; z-index: 8; padding: 12px 0 4px; margin-top: 4px; gap: 8px; background: #1e1f22; }
-.toolbar-main { gap: 8px; }
+.call-toolbar { position: sticky; bottom: -12px; z-index: 8; padding: 12px 0 4px; margin-top: 4px; gap: 8px; background: var(--signal-call-bg, #1e1f22); }
+.toolbar-main { gap: 8px; background: transparent; }
 .call-control { min-height: 42px; gap: 8px; padding: 11px 13px; border: 0; border-radius: 8px; background: #383a40; color: #f2f3f5; font-size: 12px; font-weight: 500; }
 .call-control:hover:not(:disabled) { background: #4e5058; }
 .call-control svg { width: 20px; height: 20px; }
@@ -298,9 +298,9 @@ label { color: #b5bac1; font-size: 12px; font-weight: 700; gap: 8px; }
 .call-control.active:hover:not(:disabled) { background: #dbdee1; }
 .call-control.leave-call { color: #fff; background: #da373c; margin-left: 0; }
 .call-control.leave-call:hover { background: #a12828; }
-.toolbar-divider { height: 28px; margin: 0 2px; background: #4e5058; }
-.toolbar-note { color: #949ba4; font-size: 10px; }
-.status-dot { background: #23a55a; }
+.toolbar-divider { height: 28px; margin: 0 2px; background: var(--signal-border, #4e5058); }
+.toolbar-note { color: var(--signal-muted, #949ba4); font-size: 10px; }
+.status-dot { background: var(--signal-success, #23a55a); }
 .call-status { min-height: 155px; padding: 16px; color: #949ba4; gap: 12px; }
 .call-status h3 { color: #f2f3f5; font-size: 18px; }
 .call-status p { color: #b5bac1; font-size: 13px; line-height: 1.6; }

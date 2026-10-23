@@ -21,6 +21,9 @@ declare global {
       getSettings():Promise<DesktopSettings>;
       setSettings(settings:Partial<DesktopSettings>):Promise<DesktopSettings>;
       show():void;
+      callNotificationsSupported():Promise<boolean>;
+      notifyIncomingCall(call:{id:string;username:string;expiresAt:string}):Promise<boolean>;
+      dismissCallNotification(callId?:string):Promise<void>;
       getUpdateState():Promise<UpdateState>;
       checkUpdate():Promise<UpdateState>;
       downloadUpdate():Promise<UpdateState>;

@@ -1,6 +1,6 @@
 'use strict';
 
-const { app, BrowserWindow, Menu, Tray, nativeImage, session, protocol, net, ipcMain, desktopCapturer, globalShortcut, screen } = require('electron');
+const { app, BrowserWindow, Menu, Tray, nativeImage, session, protocol, net, ipcMain, desktopCapturer, globalShortcut, screen, Notification } = require('electron');
 const { pathToFileURL } = require('node:url');
 const path = require('node:path');
 const fs = require('node:fs');
@@ -28,6 +28,8 @@ let connectingSocket = null;
 let socketGeneration = 0;
 let rendererReady = false;
 const eventSnapshots = new Map();
+const callNotifications = new Map();
+const seenCallNotifications = new Map();
 let retryTimer = null;
 let retryAttempt = 0;
 let capture = null;
@@ -81,6 +83,37 @@ function showWindow() {
   if (mainWindow.isMinimized()) mainWindow.restore();
   mainWindow.show(); mainWindow.focus();
 }
+function dismissCallNotification(id) {
+  const item = callNotifications.get(id);
+  if (!item) return;
+  callNotifications.delete(id);
+  clearTimeout(item.timer);
+  item.notification.close();
+}
+function dismissAllCallNotifications() {
+  for (const id of [...callNotifications.keys()]) dismissCallNotification(id);
+}
+function notifyIncomingCall(value) {
+  if (!authenticated || !Notification.isSupported() || !value || typeof value !== 'object' || Array.isArray(value)) return false;
+  if (typeof value.id !== 'string' || !/^[A-Za-z0-9_-]{1,80}$/.test(value.id)
+    || typeof value.username !== 'string' || !/^[A-Za-z0-9_-]{3,32}$/.test(value.username)
+    || typeof value.expiresAt !== 'string' || value.expiresAt.length > 40) throw new Error('Недопустимое уведомление о звонке.');
+  const now = Date.now(), expiresAt = Date.parse(value.expiresAt);
+  if (!Number.isFinite(expiresAt) || expiresAt <= now || expiresAt > now + 46_000) return false;
+  for (const [id, until] of seenCallNotifications) if (until <= now) seenCallNotifications.delete(id);
+  if (seenCallNotifications.has(value.id)) return true;
+  while (seenCallNotifications.size >= 200) seenCallNotifications.delete(seenCallNotifications.keys().next().value);
+  seenCallNotifications.set(value.id, expiresAt + 60_000);
+  try {
+    const notification = new Notification({ title: 'Входящий звонок в Сигнал', body: `@${value.username} звонит вам`, silent: true, timeoutType: 'never' });
+    const timer = setTimeout(() => dismissCallNotification(value.id), Math.max(1, expiresAt - now));
+    timer.unref(); callNotifications.set(value.id, { notification, timer });
+    notification.on('click', () => { showWindow(); dismissCallNotification(value.id); });
+    notification.on('close', () => { const current = callNotifications.get(value.id); if (current?.notification === notification) { clearTimeout(current.timer); callNotifications.delete(value.id); } });
+    notification.on('failed', () => dismissCallNotification(value.id));
+    notification.show(); return true;
+  } catch { dismissCallNotification(value.id); return false; }
+}
 function receiveInvite(value) {
   const code = inviteCode(value);
   if (!code) return;
@@ -110,6 +143,7 @@ function stopSocket() {
   socketGeneration++;
   connectingSocket = null;
   eventSnapshots.clear();
+  dismissAllCallNotifications();
   clearTimeout(retryTimer); retryTimer = null; retryAttempt = 0;
   const old = socket; socket = null;
   if (old) { old.removeAllListeners(); old.on('error', () => {}); old.close(); }
@@ -139,8 +173,18 @@ async function connectSocket() {
       if (binary) return;
       try {
         const data = JSON.parse(payload.toString());
-        if (data && ['presence', 'channels', 'message', 'message-updated', 'message-deleted', 'invitations', 'moderation'].includes(data.type)) {
-          if (['presence', 'channels', 'invitations'].includes(data.type)) eventSnapshots.set(data.type, data);
+        if (data && ['presence', 'channels', 'workspaces', 'friends', 'direct-calls', 'direct-call', 'message', 'message-updated', 'message-deleted', 'invitations', 'moderation'].includes(data.type)) {
+          if (['presence', 'channels', 'workspaces', 'friends', 'direct-calls', 'invitations'].includes(data.type)) eventSnapshots.set(data.type, data);
+          if (data.type === 'direct-call' && data.call && typeof data.call.id === 'string') {
+            const calls = new Map((eventSnapshots.get('direct-calls')?.calls || []).map((call) => [call.id, call]));
+            if (['pending', 'accepted'].includes(data.call.status)) calls.set(data.call.id, data.call); else calls.delete(data.call.id);
+            eventSnapshots.set('direct-calls', { type: 'direct-calls', calls: [...calls.values()].slice(-200) });
+            if (data.call.status !== 'pending') dismissCallNotification(data.call.id);
+          }
+          if (data.type === 'direct-calls' && Array.isArray(data.calls)) {
+            const pending = new Set(data.calls.filter((call) => call?.status === 'pending').map((call) => call.id));
+            for (const id of [...callNotifications.keys()]) if (!pending.has(id)) dismissCallNotification(id);
+          }
           sendEvent(data);
         }
       } catch { /* The renderer only receives recognized JSON event types. */ }
@@ -149,6 +193,7 @@ async function connectSocket() {
       if (socket !== connection) return;
       socket = null;
       if (code === 4001) authenticated = false;
+      if (code === 4001) dismissAllCallNotifications();
       sendEvent({ type: 'desktop-connection', connected: false, code });
       retrySocket();
     });
@@ -307,6 +352,14 @@ function configureIpc() {
     else throw new Error('Неизвестное действие.');
   });
   ipcMain.handle('signal:show', (event) => { requireMainSender(event); showWindow(); });
+  ipcMain.handle('signal:call-notifications-supported', (event) => { requireMainSender(event); return Notification.isSupported(); });
+  ipcMain.handle('signal:call-notify', (event, value) => { requireMainSender(event); return notifyIncomingCall(value); });
+  ipcMain.handle('signal:call-notification-dismiss', (event, callId) => {
+    requireMainSender(event);
+    if (callId === undefined) dismissAllCallNotifications();
+    else if (typeof callId === 'string' && /^[A-Za-z0-9_-]{1,80}$/.test(callId)) dismissCallNotification(callId);
+    else throw new Error('Недопустимый идентификатор звонка.');
+  });
   ipcMain.handle('signal:settings-get', (event) => { requireMainSender(event); return publicSettings(); });
   ipcMain.handle('signal:settings-set', (event, value) => {
     requireMainSender(event);

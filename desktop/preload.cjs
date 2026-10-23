@@ -20,4 +20,7 @@ contextBridge.exposeInMainWorld('signalDesktop', Object.freeze({
   downloadUpdate: () => ipcRenderer.invoke('signal:update-download'),
   installUpdate: () => ipcRenderer.invoke('signal:update-install'),
   show: () => ipcRenderer.invoke('signal:show'),
+  callNotificationsSupported: () => ipcRenderer.invoke('signal:call-notifications-supported'),
+  notifyIncomingCall: (call) => ipcRenderer.invoke('signal:call-notify', call),
+  dismissCallNotification: (callId) => ipcRenderer.invoke('signal:call-notification-dismiss', callId),
 }));

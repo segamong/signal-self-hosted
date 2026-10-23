@@ -25,6 +25,10 @@ function savedTheme(): ThemeId {
   } catch { return 'dark'; }
 }
 
+// Restore before the account screen renders as well as after sign-in. The
+// native Android application keeps its own appearance.
+if (!window.signalAndroidBridge) document.documentElement.dataset.signalTheme = savedTheme();
+
 /** Browser and Windows appearance. Native Android retains its own theme. */
 export function ThemeMenu() {
   const [theme, setTheme] = useState<ThemeId>(savedTheme);
@@ -92,10 +96,10 @@ export function ThemeMenu() {
       <header><h2 id={`${id}-title`}><Palette size={18} />Тема приложения</h2><button className="icon-btn" aria-label="Закрыть выбор темы" onClick={() => { setOpen(false); anchor.current?.focus(); }}><X size={18} /></button></header>
       <fieldset><legend>Цвет оформления</legend><div className="theme-choice-grid">{THEMES.map(option => <label className={`theme-choice${theme === option.id ? ' selected' : ''}`} key={option.id}>
         <input type="radio" name={`${id}-theme`} value={option.id} checked={theme === option.id} onChange={() => setTheme(option.id)} />
-        <span className="theme-choice-preview" aria-hidden="true" style={{ background: option.colors[0] }}><i style={{ background: option.colors[1] }} /><b style={{ background: option.colors[2] }} />{theme === option.id && <Check size={15} />}</span>
+        <span className="theme-choice-preview" aria-hidden="true" style={{ background: option.colors[0], color: option.id === 'light' ? '#30343b' : '#dbdee1' }}><i style={{ background: option.colors[1] }} /><b style={{ background: option.colors[2] }} /><em />{theme === option.id && <Check size={15} />}</span>
         <span>{option.label}</span>
       </label>)}</div></fieldset>
-      <p>Сохраняется на этом устройстве.</p>
+      <p className="theme-selection-status" role="status">Выбрана: <strong>{THEMES.find(option => option.id === theme)?.label}</strong><br />Сохраняется на этом устройстве.</p>
     </div>, document.body)}
   </div>;
 }

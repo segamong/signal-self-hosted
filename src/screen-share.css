@@ -4,3 +4,11 @@
 .share-stage:fullscreen .share-video-wrap{flex:1;min-height:0;height:auto;display:flex;align-items:center;justify-content:center}
 .share-stage:fullscreen .share-switcher{flex-shrink:0}
 .share-stage:fullscreen .screen-video{width:100%;height:100%;object-fit:contain}
+.share-actions{display:flex;align-items:center;gap:12px;flex-shrink:0}
+.share-audio-control{display:flex;align-items:center;gap:7px;color:var(--signal-text,#dbdee1)}
+.share-audio-control .share-audio-toggle{display:grid;place-items:center;width:28px;height:28px;padding:4px;border-radius:4px;color:var(--signal-interactive,#b5bac1);background:var(--signal-hover,#35373c)}
+.share-audio-control .share-audio-toggle:hover:not(:disabled){color:var(--signal-heading,#f2f3f5);background:var(--signal-selected,#404249)}
+.share-audio-control input[type=range]{width:95px;height:18px;padding:0;margin:0;box-shadow:none;accent-color:var(--signal-accent,#5865f2)}
+.share-audio-control output{width:36px;font-size:11px;text-align:right;font-variant-numeric:tabular-nums;color:var(--signal-muted,#949ba4)}
+.share-audio-control :disabled{opacity:.4;cursor:not-allowed}
+@media(max-width:600px){.share-title{flex-wrap:wrap}.share-actions{gap:6px;margin-left:auto}.share-audio-control input[type=range]{width:70px}.share-audio-control output{width:31px;font-size:10px}}

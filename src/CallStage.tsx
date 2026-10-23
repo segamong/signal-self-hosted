@@ -293,6 +293,7 @@ export default function CallStage({ channel, user, onLeave, onError, initialPref
     return () => { cancelled = true; };
   }, []);
   const [volumes, setVolumes] = useState<Record<string, number>>({});
+  const [shareVolumes, setShareVolumes] = useState<Record<string, number>>({});
   const [focusedShare, setFocusedShare] = useState<string | null>(null);
   const focusedShareRef = useRef<string | null>(null);
   const [memberDirectory, setMemberDirectory] = useState<{ channelId: string; usernames: Map<string, string> }>({ channelId: '', usernames: new Map() });
@@ -853,9 +854,9 @@ export default function CallStage({ channel, user, onLeave, onError, initialPref
 
     {room && <>
       {audioBlocked && !deafened && <div className="audio-unlock" role="status"><Volume2 size={18} /><span>Браузер ожидает разрешения на воспроизведение звука.</span><button onClick={() => act('audio', async current => { await current.startAudio(); if (roomRef.current === current) setAudioBlocked(!current.canPlaybackAudio); })}>Включить звук</button></div>}
-      <div className="remote-audio" aria-hidden="true">{remote.flatMap(participant => [...participant.audioTrackPublications.values()].map(publication => publication.audioTrack instanceof RemoteAudioTrack && (publication.source !== Track.Source.ScreenShareAudio || participant.identity === shareParticipant?.identity) ? <RemoteAudio key={publication.trackSid} track={publication.audioTrack} deafened={deafened} volume={volumes[participant.identity] ?? 100} onBlocked={markAudioBlocked} /> : null))}</div>
+      <div className="remote-audio" aria-hidden="true">{remote.flatMap(participant => [...participant.audioTrackPublications.values()].map(publication => publication.audioTrack instanceof RemoteAudioTrack && (publication.source !== Track.Source.ScreenShareAudio || participant.identity === shareParticipant?.identity) ? <RemoteAudio key={publication.trackSid} track={publication.audioTrack} deafened={deafened} volume={(publication.source === Track.Source.ScreenShareAudio ? shareVolumes : volumes)[participant.identity] ?? 100} onBlocked={markAudioBlocked} /> : null))}</div>
       <div className={`call-media-layout${shareParticipant ? ' has-screen-share' : ''}`}>
-      {shareParticipant && <ScreenShareFrame username={usernameFor(shareParticipant)} onError={message => callbacks.current.onError(message)}>
+      {shareParticipant && <ScreenShareFrame username={usernameFor(shareParticipant)} onError={message => callbacks.current.onError(message)} audio={shareParticipant.isLocal ? undefined : { available: Boolean(shareParticipant.getTrackPublication(Track.Source.ScreenShareAudio) && !shareParticipant.getTrackPublication(Track.Source.ScreenShareAudio)?.isMuted), volume: shareVolumes[shareParticipant.identity] ?? 100, onVolume: volume => setShareVolumes(previous => ({ ...previous, [shareParticipant.identity]: Math.min(100, Math.max(0, volume)) })) }}>
         <div className="share-video-wrap">{shareTrack ? <MediaVideo track={shareTrack} local={shareParticipant.isLocal} screen /> : <div className="share-loading"><LoaderCircle className="spin" size={24} /><span>Подключаем выбранную демонстрацию…</span></div>}</div>
         {shares.length > 1 && <div className="share-switcher">{shares.map(participant => <button key={participant.identity} className={participant === shareParticipant ? 'active' : ''} aria-pressed={participant === shareParticipant} onClick={() => focusShare(participant.identity)}>{usernameFor(participant)}</button>)}</div>}
       </ScreenShareFrame>}

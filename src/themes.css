@@ -19,6 +19,10 @@
   --signal-focus: #00a8fc;
   --signal-success: #3bbd77;
   --signal-danger: #fa777c;
+  --signal-warning: #f0b232;
+  --signal-call-bg: var(--signal-deep);
+  --signal-overlay: #0009;
+  --signal-shadow: 0 12px 42px #0006;
   --accent: var(--signal-accent);
   --muted: var(--signal-muted);
   --line: var(--signal-border);
@@ -46,6 +50,7 @@
   --signal-text: #30343b; --signal-heading: #17191e; --signal-muted: #5d6470; --signal-interactive: #4c5360;
   --signal-accent: #4752c4; --signal-accent-hover: #3942a5; --signal-accent-soft: #4752c416;
   --signal-focus: #005dcc; --signal-success: #1e7447; --signal-danger: #b12737;
+  --signal-warning: #8c5d06; --signal-overlay: #1e24336b; --signal-shadow: 0 12px 42px #14213d26;
 }
 :root[data-signal-theme="violet"] {
   --signal-bg: #30283e; --signal-panel: #272134; --signal-deep: #1c1727; --signal-dock: #211b2c;
@@ -103,7 +108,9 @@
 :root[data-signal-theme] .call-settings .voice-preset-buttons button:hover:not(:disabled) { background: var(--signal-selected); }
 :root[data-signal-theme] :is(.checkbox-label input,.call-settings .voice-switches input[type=checkbox],input[type=range]) { accent-color: var(--signal-accent); }
 :root[data-signal-theme] .call-settings-drawer>header .icon-btn { color: var(--signal-interactive); background: var(--signal-hover); }
-:root[data-signal-theme] .call-stage { background: var(--signal-deep); }
+:root[data-signal-theme] :is(.call-stage,.call-toolbar) { background: var(--signal-call-bg); }
+:root[data-signal-theme] :is(.toolbar-main,.toolbar-note) { background: transparent; }
+:root[data-signal-theme] .toolbar-divider { background: var(--signal-border); }
 :root[data-signal-theme] :is(.call-heading h2,.call-heading .call-count) { color: var(--signal-heading); }
 :root[data-signal-theme] .call-control { color: var(--signal-heading); background: var(--signal-hover); }
 :root[data-signal-theme] .call-control:hover:not(:disabled) { background: var(--signal-selected); }
@@ -129,6 +136,55 @@
 :root[data-signal-theme] .message-history { scrollbar-color: var(--signal-deep) var(--signal-panel); }
 :root[data-signal-theme] .sidebar-scroll { scrollbar-color: var(--signal-deep) transparent; }
 
+/* The palette also covers secondary surfaces, popovers and the complete call
+   footer. Video frames and their dark caption overlays stay neutral. */
+:root[data-signal-theme] :is(.auth-card h2,.auth-card label,.channel-list-heading p,.channel-permissions strong,.invitation-inbox-empty h3,.invitation-inbox-channel-info h3,.pinned-messages-summary strong,.pinned-messages-empty>strong,.update-heading strong) { color: var(--signal-heading); }
+:root[data-signal-theme] :is(.auth-card>p,.auth-tabs button,.desktop-settings label,.channel-invitation-heading p,.channel-invitation-heading strong,.channel-invitation-heading h3,.invitation-inbox .invitation-inbox-description,.invitation-inbox-channel-info p,.invitation-inbox-channel-info strong,.pinned-message .message-text,.pinned-messages-summary>span,.desktop-update-card p.update-message) { color: var(--signal-text); }
+:root[data-signal-theme] :is(.auth-card p.auth-hint,.auth-bottom,.invitation-inbox-empty p,.invitation-inbox .invitation-inbox-expiry,.channel-member-identity strong small,.channel-invitation-form .channel-invitation-help,.update-heading span,.desktop-update-card p.update-footnote,.pinned-messages .pinned-messages-empty>p,.channel-list-empty,.message-editor-footer>span,.message-editor-label) { color: var(--signal-muted); }
+:root[data-signal-theme] :is(.auth-tabs,.auth-tabs button:hover:not(.active),.invitation-inbox-empty-icon,.pinned-messages-empty>span,.pinned-messages-summary b) { background: var(--signal-panel); color: var(--signal-text); }
+:root[data-signal-theme] .auth-tabs button.active { background: var(--signal-selected); color: var(--signal-heading); }
+:root[data-signal-theme] :is(.welcome-symbol,.modal-icon,.channel-settings-icon,.channel-role) { background: var(--signal-selected); color: var(--signal-heading); }
+:root[data-signal-theme] :is(.rail-divider,.header-divider), :root[data-signal-theme] .date-divider::before, :root[data-signal-theme] .date-divider::after { background: var(--signal-border); }
+:root[data-signal-theme] :is(.modal-overlay,.call-settings-overlay) { background: var(--signal-overlay); }
+:root[data-signal-theme] :is(.modal-card,.theme-menu-popup,.call-settings-drawer) { box-shadow: var(--signal-shadow); }
+:root[data-signal-theme] :is(.message-tools,.message-reaction-picker,.message-editor,.desktop-update-card,.invitation-link-section,.channel-settings-tabs,.channel-settings-icon) { border-color: var(--signal-border); }
+:root[data-signal-theme] :is(.message-tools button,.message-editor-footer>span,.channel-settings-tabs button,.channel-invitation-form .channel-invitation-label) { color: var(--signal-interactive); }
+:root[data-signal-theme] :is(.message-tools button:hover,.message-tools button.active,.message-reaction:hover) { background: var(--signal-selected); color: var(--signal-heading); }
+:root[data-signal-theme] .message-reaction { background: var(--signal-panel); color: var(--signal-text); }
+:root[data-signal-theme] .message-reaction.mine { background: var(--signal-accent-soft); color: var(--signal-heading); }
+:root[data-signal-theme] .send-button:hover:not(:disabled) { color: #fff; background: var(--signal-accent); }
+:root[data-signal-theme] :is(.form-error,.channel-settings-error,.desktop-update-card p.update-error,.pinned-messages-error,.channel-action.destructive,.message-tools .message-delete:hover,.friend-remove-confirm>button:first-of-type) { color: var(--signal-danger); }
+:root[data-signal-theme] .channel-action.destructive:hover:not(:disabled) { color: #fff; background: #b12737; }
+:root[data-signal-theme] :is(.channel-role.role-owner,.user-profile-role.profile-role-owner,.setup-banner,.connection-chip.offline) { color: var(--signal-warning); }
+:root[data-signal-theme] :is(select option,select optgroup) { color: var(--signal-text); background: var(--signal-input); }
+:root[data-signal-theme] .call-settings input[type=range] { background: transparent; }
+:root[data-signal-theme] .call-settings .voice-settings-grid input[type=range] { accent-color: var(--signal-accent); }
+:root[data-signal-theme] :is(.call-settings-scroll,.call-stage) { scrollbar-color: var(--signal-selected) transparent; }
+:root[data-signal-theme] .call-connection { color: var(--signal-muted); }
+:root[data-signal-theme] :is(.call-connection.connected,.call-encryption summary,.status-dot) { color: var(--signal-success); }
+:root[data-signal-theme] .status-dot { background: var(--signal-success); }
+:root[data-signal-theme] .call-encryption .encryption-popover { color: var(--signal-text); background: var(--signal-panel); border-color: var(--signal-border); box-shadow: var(--signal-shadow); }
+:root[data-signal-theme] .call-encryption .encryption-popover strong { color: var(--signal-heading); }
+:root[data-signal-theme] .call-encryption .encryption-popover p { color: var(--signal-text); }
+:root[data-signal-theme] .call-encryption .encryption-popover small { color: var(--signal-muted); }
+:root[data-signal-theme] .call-encryption .encryption-popover code { color: var(--signal-success); background: var(--signal-input); }
+:root[data-signal-theme] .participant-tile:not(.has-video) { background: var(--signal-panel); }
+:root[data-signal-theme] .participant-avatar { background: var(--signal-accent); color: #fff; }
+:root[data-signal-theme] .participant-tile.speaking { border-color: var(--signal-success); }
+:root[data-signal-theme] .volume-popover input { accent-color: var(--signal-accent); }
+:root[data-signal-theme] .share-stage:not(:fullscreen) .share-title { color: var(--signal-heading); }
+:root[data-signal-theme] .share-stage:not(:fullscreen) .share-title small { color: var(--signal-muted); }
+:root[data-signal-theme] .share-stage:not(:fullscreen) .share-title .icon-button { color: var(--signal-interactive); background: var(--signal-hover); }
+:root[data-signal-theme] .share-stage:not(:fullscreen) .share-title .icon-button:hover { color: var(--signal-heading); background: var(--signal-selected); }
+:root[data-signal-theme] .share-stage:not(:fullscreen) .share-switcher button { color: var(--signal-interactive); background: var(--signal-hover); }
+:root[data-signal-theme] .share-stage:not(:fullscreen) .share-switcher button:hover { color: var(--signal-heading); background: var(--signal-selected); }
+:root[data-signal-theme] .share-stage:not(:fullscreen) .share-switcher button.active { color: #fff; background: var(--signal-accent); }
+:root[data-signal-theme] .share-title .share-audio-control { color: var(--signal-text); }
+:root[data-signal-theme] .audio-unlock { color: var(--signal-text); background: var(--signal-accent-soft); }
+:root[data-signal-theme] .audio-unlock button { color: #fff; background: var(--signal-accent); }
+:root[data-signal-theme] .call-control:disabled { color: var(--signal-muted); opacity: .5; }
+:root[data-signal-theme] .call-settings .voice-preset-buttons button[aria-pressed="true"] { color: var(--signal-heading); background: var(--signal-accent-soft); box-shadow: inset 0 0 0 1px var(--signal-accent); }
+
 .theme-menu { position: relative; display: flex; flex: 0 0 auto; }
 .user-panel>.theme-menu,.user-panel>.personal-audio-controls { flex: 0 0 auto; min-width: 0; }
 .theme-menu-toggle { display: inline-flex; justify-content: center; align-items: center; cursor: pointer; }
@@ -145,11 +201,13 @@
 .theme-menu-popup .theme-choice.selected { border-color: var(--signal-accent,#5865f2); background: var(--signal-accent-soft,#5865f226); }
 .theme-choice input { position: absolute; opacity: 0; width: 1px; height: 1px; padding: 0; }
 .theme-choice:has(input:focus-visible) { outline: 2px solid var(--signal-focus,#00a8fc); outline-offset: 2px; }
-.theme-choice-preview { position: relative; display: block; height: 44px; overflow: hidden; border-radius: 4px; border: 1px solid #ffffff20; }
+.theme-choice-preview { position: relative; display: block; height: 52px; overflow: hidden; border-radius: 4px; border: 1px solid var(--signal-border,#45474e); }
 .theme-choice-preview>i { position: absolute; inset: 0 auto 0 0; width: 28%; }
-.theme-choice-preview>b { position: absolute; left: 38%; top: 14px; right: 14px; height: 7px; border-radius: 3px; }
+.theme-choice-preview>b { position: absolute; left: 38%; top: 12px; right: 14px; height: 7px; border-radius: 3px; }
+.theme-choice-preview>em { position: absolute; top: 27px; left: 38%; right: 18px; height: 4px; background: currentColor; border-radius: 2px; opacity: .45; box-shadow: 0 9px 0 currentColor; }
 .theme-choice-preview>svg { position: absolute; top: 3px; right: 3px; padding: 2px; width: 20px; height: 20px; border-radius: 50%; background: #15171b; color: #fff; }
 .theme-menu-popup>p { margin: 14px 0 0; color: var(--signal-muted,#a1a6af); font-size: 11px; line-height: 1.5; }
+.theme-menu-popup .theme-selection-status strong { color: var(--signal-heading,#f2f3f5); font-weight: 600; }
 .personal-audio-controls { display: flex; align-items: center; gap: 0; }
 .personal-audio-button { display: grid; place-items: center; width: 28px; height: 32px; border: 0; padding: 0; border-radius: 4px; background: transparent; color: var(--signal-muted,#949ba4); cursor: pointer; transition: color 120ms,background-color 120ms; }
 .personal-audio-button.enabled { color: var(--signal-heading,#f2f3f5); }
