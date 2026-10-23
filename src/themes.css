@@ -112,7 +112,14 @@
 :root[data-signal-theme] :is(.primary,.primary.direct-call-button):hover:not(:disabled) { color: #fff; background: var(--signal-accent-hover); }
 :root[data-signal-theme] :is(.brand-dot,.update-heading,.channel-permissions>svg) { color: var(--signal-accent); }
 :root[data-signal-theme] :is(.channel-header,.workspace-heading,.sidebar-call,.sidebar-card,.invitation-link-section,.channel-danger-zone,.pinned-messages-summary,.invitation-inbox-footer,.call-settings-drawer,.call-settings-drawer>header) { border-color: var(--signal-border); }
-:root[data-signal-theme] :is(input,textarea,select,.direct-start .direct-username-field,.channel-invitation-input-wrap,.channel-settings-panel input,.channel-settings-panel textarea,.message-editor textarea) { color: var(--signal-text); background: var(--signal-input); }
+/* Keep basic field specificity low: wrapper selectors must not make every
+   textarea override its containing composer surface through :is(). */
+:root[data-signal-theme] :is(input,textarea,select) { color: var(--signal-text); background: var(--signal-input); }
+:root[data-signal-theme] .direct-start .direct-username-field,
+:root[data-signal-theme] .channel-invitation-input-wrap,
+:root[data-signal-theme] .channel-settings-panel input,
+:root[data-signal-theme] .channel-settings-panel textarea,
+:root[data-signal-theme] .message-editor textarea { color: var(--signal-text); background: var(--signal-input); }
 :root[data-signal-theme] :is(input,textarea)::placeholder { color: var(--signal-muted); }
 :root[data-signal-theme] :is(input,select,textarea):focus { border-color: var(--signal-focus); }
 :root[data-signal-theme] :is(button,a,input):focus-visible { outline-color: var(--signal-focus); }
