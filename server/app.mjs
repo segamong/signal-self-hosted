@@ -35,7 +35,7 @@ async function passwordMatches(password, encoded) {
 }
 
 function validPassword(value) {
-  return typeof value === 'string' && value.length >= 12 && value.length <= 128 && Buffer.byteLength(value) <= 512;
+  return typeof value === 'string' && [...value].length >= 8 && value.length <= 128 && Buffer.byteLength(value) <= 512;
 }
 
 function readCookie(req) {
@@ -67,7 +67,7 @@ export async function createApp(options = {}) {
   try {
     if (!db.prepare('SELECT id FROM users LIMIT 1').get()) {
       if (!USERNAME.test(env.ADMIN_USERNAME || '') || !validPassword(env.ADMIN_PASSWORD)) {
-        throw new Error('Первый запуск: задайте ADMIN_USERNAME (3–32 латинских символа) и ADMIN_PASSWORD (12–128 символов). Общего пароля по умолчанию нет.');
+        throw new Error('Первый запуск: задайте ADMIN_USERNAME (3–32 латинских символа) и ADMIN_PASSWORD (8–128 символов). Общего пароля по умолчанию нет.');
       }
       const passwordHash = await hashPassword(env.ADMIN_PASSWORD);
       db.prepare('INSERT INTO users (id, username, display_name, password_hash, role, created_at) VALUES (?, ?, ?, ?, ?, ?)')
@@ -329,7 +329,7 @@ export async function createApp(options = {}) {
     enforceRate(`register:${req.ip}`, 5, 60 * 60_000);
     const { username, password } = req.body || {};
     if (typeof username !== 'string' || !USERNAME.test(username)) throw new HttpError(400, 'Имя: 3–32 латинские буквы, цифры, дефис или подчёркивание.');
-    if (!validPassword(password)) throw new HttpError(400, 'Пароль должен содержать от 12 до 128 символов.');
+    if (!validPassword(password)) throw new HttpError(400, 'Пароль должен содержать от 8 до 128 символов.');
     if (db.prepare('SELECT id FROM users WHERE username = ?').get(username.toLowerCase())) throw new HttpError(409, 'Это имя уже занято.');
     const passwordHash = await hashPassword(password);
     const id = randomUUID();
@@ -350,7 +350,7 @@ export async function createApp(options = {}) {
     enforceRate(`password-ip:${req.ip}`, 10, 15 * 60_000);
     const { currentPassword, newPassword } = req.body || {};
     if (typeof currentPassword !== 'string' || !currentPassword.length || currentPassword.length > 128 || Buffer.byteLength(currentPassword) > 512) throw new HttpError(400, 'Укажите текущий пароль.');
-    if (!validPassword(newPassword)) throw new HttpError(400, 'Новый пароль должен содержать от 12 до 128 символов.');
+    if (!validPassword(newPassword)) throw new HttpError(400, 'Новый пароль должен содержать от 8 до 128 символов.');
     const userId = req.auth.user.id, currentToken = req.auth.tokenHash;
     const account = db.prepare('SELECT password_hash FROM users WHERE id = ?').get(userId);
     if (!account || !await passwordMatches(currentPassword, account.password_hash)) throw new HttpError(403, 'Текущий пароль указан неверно.');

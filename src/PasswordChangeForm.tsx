@@ -12,7 +12,7 @@ export function PasswordChangeForm({username}:{username:string}){
   async function submit(event:FormEvent){
     event.preventDefault();if(pending.current)return;setSuccess(false);setError('');setField('');
     if(!current){invalid('currentPassword','Введите текущий пароль.');return;}
-    if(password.length<12||password.length>128||new TextEncoder().encode(password).length>512){invalid('newPassword','Новый пароль должен содержать от 12 до 128 символов.');return;}
+    if([...password].length<8||password.length>128||new TextEncoder().encode(password).length>512){invalid('newPassword','Новый пароль должен содержать от 8 до 128 символов.');return;}
     if(password===current){invalid('newPassword','Новый пароль должен отличаться от текущего.');return;}
     if(password!==confirm){invalid('confirmPassword','Новые пароли не совпадают.');return;}
     pending.current=true;setBusy(true);
@@ -25,9 +25,9 @@ export function PasswordChangeForm({username}:{username:string}){
     {!open?<button className="secondary" onClick={()=>{clear();setSuccess(false);setOpen(true);}}>Изменить пароль</button>:<form ref={form} onSubmit={submit} aria-busy={busy}>
       <input className="password-username" name="username" autoComplete="username" value={username} readOnly tabIndex={-1} aria-hidden="true"/>
       <label htmlFor={`${id}-current`}>Текущий пароль<input id={`${id}-current`} name="currentPassword" type="password" autoComplete="current-password" value={current} onChange={event=>setCurrent(event.target.value)} required maxLength={128} autoFocus disabled={busy} aria-invalid={field==='currentPassword'} aria-describedby={error?`${id}-error`:undefined}/></label>
-      <label htmlFor={`${id}-new`}>Новый пароль<input id={`${id}-new`} name="newPassword" type="password" autoComplete="new-password" value={password} onChange={event=>setPassword(event.target.value)} required minLength={12} maxLength={128} disabled={busy} aria-invalid={field==='newPassword'} aria-describedby={`${id}-hint${error?` ${id}-error`:''}`}/></label>
-      <label htmlFor={`${id}-confirm`}>Повторите новый пароль<input id={`${id}-confirm`} name="confirmPassword" type="password" autoComplete="new-password" value={confirm} onChange={event=>setConfirm(event.target.value)} required minLength={12} maxLength={128} disabled={busy} aria-invalid={field==='confirmPassword'} aria-describedby={error?`${id}-error`:undefined}/></label>
-      <p id={`${id}-hint`} className="password-hint">От 12 до 128 символов. Используйте отдельный пароль для Сигнала.</p>
+      <label htmlFor={`${id}-new`}>Новый пароль<input id={`${id}-new`} name="newPassword" type="password" autoComplete="new-password" value={password} onChange={event=>setPassword(event.target.value)} required minLength={8} maxLength={128} disabled={busy} aria-invalid={field==='newPassword'} aria-describedby={`${id}-hint${error?` ${id}-error`:''}`}/></label>
+      <label htmlFor={`${id}-confirm`}>Повторите новый пароль<input id={`${id}-confirm`} name="confirmPassword" type="password" autoComplete="new-password" value={confirm} onChange={event=>setConfirm(event.target.value)} required minLength={8} maxLength={128} disabled={busy} aria-invalid={field==='confirmPassword'} aria-describedby={error?`${id}-error`:undefined}/></label>
+      <p id={`${id}-hint`} className="password-hint">От 8 до 128 символов. Используйте отдельный пароль для Сигнала.</p>
       {error&&<p className="form-error" id={`${id}-error`} role="alert">{error}</p>}
       <div className="password-actions"><button className="secondary" type="button" disabled={busy} onClick={()=>{clear();setOpen(false);}}>Отмена</button><button className="primary" disabled={busy}>{busy&&<LoaderCircle className="spin" size={16}/>} {busy?'Сохраняем…':'Сохранить пароль'}</button></div>
     </form>}

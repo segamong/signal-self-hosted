@@ -21,9 +21,13 @@
   --signal-danger: #fa777c;
   --signal-warning: #f0b232;
   --signal-call-bg: var(--signal-deep);
-  --signal-app-gradient: linear-gradient(155deg, #34363c, #2f3136);
-  --signal-panel-gradient: linear-gradient(165deg, #2e3035, #292b2f);
-  --signal-call-gradient: linear-gradient(165deg, #23252a, #1c1e22);
+  --signal-app-gradient: linear-gradient(155deg, #393c43, #292c32);
+  --signal-panel-gradient: linear-gradient(165deg, #32353b, #24272c);
+  --signal-call-gradient: linear-gradient(165deg, #2a2d33, #191c21);
+  --signal-identity-gradient: linear-gradient(110deg, var(--signal-hover), var(--signal-selected));
+  --signal-dock-gradient: linear-gradient(110deg, var(--signal-dock), var(--signal-deep));
+  --signal-icon-glow: #8998ff50;
+  --signal-icon-ring: #8998ff26;
   --signal-overlay: #0009;
   --signal-shadow: 0 12px 42px #0006;
   --accent: var(--signal-accent);
@@ -45,9 +49,10 @@
   --signal-input: #090d16; --signal-hover: #20283a; --signal-selected: #2c3650; --signal-border: #34405a;
   --signal-text: #dce3f1; --signal-heading: #f5f7ff; --signal-muted: #a0aec5; --signal-interactive: #bdcbe2;
   --signal-accent: #5269db; --signal-accent-hover: #4358bf; --signal-accent-soft: #5269db26;
-  --signal-app-gradient: linear-gradient(155deg, #192033, #141a28);
-  --signal-panel-gradient: linear-gradient(165deg, #131a28, #0f1520);
-  --signal-call-gradient: linear-gradient(165deg, #0d1320, #080c15);
+  --signal-app-gradient: linear-gradient(155deg, #202b43, #101827);
+  --signal-panel-gradient: linear-gradient(165deg, #18233a, #0c1422);
+  --signal-call-gradient: linear-gradient(165deg, #121e31, #080e19);
+  --signal-icon-glow: #819eff55; --signal-icon-ring: #819eff2b;
 }
 :root[data-signal-theme="light"] {
   color-scheme: light;
@@ -57,18 +62,20 @@
   --signal-accent: #4752c4; --signal-accent-hover: #3942a5; --signal-accent-soft: #4752c416;
   --signal-focus: #005dcc; --signal-success: #1e7447; --signal-danger: #b12737;
   --signal-warning: #8c5d06; --signal-overlay: #1e24336b; --signal-shadow: 0 12px 42px #14213d26;
-  --signal-app-gradient: linear-gradient(155deg, #ffffff, #f6f7fa);
-  --signal-panel-gradient: linear-gradient(165deg, #f5f6f8, #eceef2);
-  --signal-call-gradient: linear-gradient(165deg, #e9ebef, #dfe2e8);
+  --signal-app-gradient: linear-gradient(155deg, #ffffff, #edf0f6);
+  --signal-panel-gradient: linear-gradient(165deg, #f8f9fc, #e4e8ef);
+  --signal-call-gradient: linear-gradient(165deg, #eef1f7, #dce2ec);
+  --signal-icon-glow: #4752c42e; --signal-icon-ring: #4752c41c;
 }
 :root[data-signal-theme="violet"] {
   --signal-bg: #30283e; --signal-panel: #272134; --signal-deep: #1c1727; --signal-dock: #211b2c;
   --signal-input: #1c1727; --signal-hover: #3b314c; --signal-selected: #4b3d60; --signal-border: #5b4b70;
   --signal-text: #e4ddeb; --signal-heading: #fcf6ff; --signal-muted: #b8aac8; --signal-interactive: #cec0de;
   --signal-accent: #7659d5; --signal-accent-hover: #6348b9; --signal-accent-soft: #7659d526;
-  --signal-app-gradient: linear-gradient(155deg, #352c44, #2e263c);
-  --signal-panel-gradient: linear-gradient(165deg, #2b2439, #251f32);
-  --signal-call-gradient: linear-gradient(165deg, #211b2e, #1a1625);
+  --signal-app-gradient: linear-gradient(155deg, #3e3251, #2a2338);
+  --signal-panel-gradient: linear-gradient(165deg, #332942, #211b2e);
+  --signal-call-gradient: linear-gradient(165deg, #281f37, #181323);
+  --signal-icon-glow: #ba99ff52; --signal-icon-ring: #ba99ff26;
 }
 :root[data-signal-theme="forest"] {
   --signal-bg: #22352f; --signal-panel: #1b2b25; --signal-deep: #101e1a; --signal-dock: #16251f;
@@ -76,18 +83,20 @@
   --signal-text: #d8e9e0; --signal-heading: #f2fff7; --signal-muted: #a7c2b4; --signal-interactive: #bfd8c9;
   --signal-accent: #287858; --signal-accent-hover: #216548; --signal-accent-soft: #45ae7d26;
   --signal-focus: #73d0a4;
-  --signal-app-gradient: linear-gradient(155deg, #263b34, #20322c);
-  --signal-panel-gradient: linear-gradient(165deg, #1e3028, #192923);
-  --signal-call-gradient: linear-gradient(165deg, #14251e, #0e1c17);
+  --signal-app-gradient: linear-gradient(155deg, #2d463c, #1b2e26);
+  --signal-panel-gradient: linear-gradient(165deg, #243b30, #15261e);
+  --signal-call-gradient: linear-gradient(165deg, #1b3025, #0d1c15);
+  --signal-icon-glow: #6fd3a052; --signal-icon-ring: #6fd3a026;
 }
 :root[data-signal-theme="rose"] {
   --signal-bg: #38272e; --signal-panel: #2e2027; --signal-deep: #21171d; --signal-dock: #281b22;
   --signal-input: #21171d; --signal-hover: #473039; --signal-selected: #5a3c47; --signal-border: #72525e;
   --signal-text: #ecdee3; --signal-heading: #fff5f8; --signal-muted: #c6abb5; --signal-interactive: #ddc0ca;
   --signal-accent: #b44158; --signal-accent-hover: #9d354b; --signal-accent-soft: #b4415826;
-  --signal-app-gradient: linear-gradient(155deg, #3e2a32, #35252d);
-  --signal-panel-gradient: linear-gradient(165deg, #32222a, #2b1e25);
-  --signal-call-gradient: linear-gradient(165deg, #281b22, #1f151b);
+  --signal-app-gradient: linear-gradient(155deg, #4a303b, #2d2028);
+  --signal-panel-gradient: linear-gradient(165deg, #3e2832, #251a21);
+  --signal-call-gradient: linear-gradient(165deg, #311f29, #1c131b);
+  --signal-icon-glow: #ef93ad50; --signal-icon-ring: #ef93ad26;
 }
 
 /* Override the original fixed dark palette without tinting video or avatars. */
@@ -169,6 +178,23 @@
 :root[data-signal-theme] :is(.channel-header,.composer-wrap) { background: transparent; }
 :root[data-signal-theme] .composer textarea { background: transparent; background-image: none; }
 :root[data-signal-theme] .call-settings-drawer .call-settings { background: transparent; }
+:root[data-signal-theme] .server-rail { background-image: linear-gradient(180deg, var(--signal-deep), var(--signal-dock)); }
+:root[data-signal-theme] :is(.user-panel,.sidebar-call) { background-image: var(--signal-dock-gradient); }
+
+/* Neutral navigation controls receive a small halo. Muted, disabled and
+   destructive call controls retain their plain, unambiguous states. */
+:root[data-signal-theme] .theme-menu-toggle:not(:disabled)>svg,
+:root[data-signal-theme] .personal-audio-button.enabled:not(:disabled)>svg,
+:root[data-signal-theme] .server-icon:not(:disabled)>svg,
+:root[data-signal-theme] .header-actions .icon-btn:not(:disabled):not(.danger):not(.destructive)>svg,
+:root[data-signal-theme] .section-label .icon-btn:not(:disabled)>svg,
+:root[data-signal-theme] .friend-action:not(:disabled):not(.danger)>svg { filter: drop-shadow(0 0 4px var(--signal-icon-glow)); }
+:root[data-signal-theme] .theme-menu-toggle:not(:disabled):is(:hover,:focus-visible),
+:root[data-signal-theme] .personal-audio-button.enabled:not(:disabled):is(:hover,:focus-visible),
+:root[data-signal-theme] .friend-action:not(:disabled):not(.danger):is(:hover,:focus-visible) { box-shadow: inset 0 0 0 1px var(--signal-icon-ring), 0 0 12px -5px var(--signal-icon-glow); }
+:root[data-signal-theme] .theme-menu-toggle:focus-visible { outline: 2px solid var(--signal-focus); outline-offset: 2px; }
+:root[data-signal-theme] .personal-audio-button:disabled>svg,
+:root[data-signal-theme] .personal-audio-button.muted>svg { filter: none; }
 
 /* The palette also covers secondary surfaces, popovers and the complete call
    footer. Video frames and their dark caption overlays stay neutral. */
@@ -251,7 +277,7 @@
 .theme-menu-popup .theme-selection-status { margin: 14px 0 0; color: var(--signal-muted,#a1a6af); font-size: 11px; line-height: 1.5; }
 .theme-menu-popup .theme-selection-status strong { color: var(--signal-heading,#f2f3f5); font-weight: 600; }
 .personal-audio-controls { display: flex; align-items: center; gap: 0; }
-.personal-audio-button { display: grid; place-items: center; width: 28px; height: 32px; border: 0; padding: 0; border-radius: 4px; background: transparent; color: var(--signal-muted,#949ba4); cursor: pointer; transition: color 120ms,background-color 120ms; }
+.personal-audio-button { display: grid; place-items: center; width: 28px; height: 40px; border: 0; padding: 0; border-radius: 6px; background: transparent; color: var(--signal-muted,#949ba4); cursor: pointer; transition: color 120ms,background-color 120ms,box-shadow 120ms; }
 .personal-audio-button.enabled { color: var(--signal-heading,#f2f3f5); }
 .personal-audio-button.muted { color: var(--signal-danger,#fa777c); }
 .personal-audio-button:hover:not(:disabled) { background: var(--signal-selected,#404249); }

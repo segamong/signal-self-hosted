@@ -6,12 +6,12 @@ import './themes.css';
 
 const STORAGE_KEY = 'signal:appearance-theme:v1';
 const THEMES = [
-  { id: 'dark', label: 'Тёмная', colors: ['#34363c', '#1e1f22', '#5865f2'], end: '#2f3136' },
-  { id: 'midnight', label: 'Полночь', colors: ['#192033', '#090d16', '#5269db'], end: '#141a28' },
-  { id: 'light', label: 'Светлая', colors: ['#ffffff', '#e3e5e8', '#4752c4'], end: '#f6f7fa' },
-  { id: 'violet', label: 'Фиолетовая', colors: ['#352c44', '#1c1727', '#7659d5'], end: '#2e263c' },
-  { id: 'forest', label: 'Зелёная', colors: ['#263b34', '#101e1a', '#287858'], end: '#20322c' },
-  { id: 'rose', label: 'Бордовая', colors: ['#3e2a32', '#21171d', '#b44158'], end: '#35252d' },
+  { id: 'dark', label: 'Тёмная', colors: ['#393c43', '#1e1f22', '#5865f2'], end: '#292c32' },
+  { id: 'midnight', label: 'Полночь', colors: ['#202b43', '#090d16', '#5269db'], end: '#101827' },
+  { id: 'light', label: 'Светлая', colors: ['#ffffff', '#e3e5e8', '#4752c4'], end: '#edf0f6' },
+  { id: 'violet', label: 'Фиолетовая', colors: ['#3e3251', '#1c1727', '#7659d5'], end: '#2a2338' },
+  { id: 'forest', label: 'Зелёная', colors: ['#2d463c', '#101e1a', '#287858'], end: '#1b2e26' },
+  { id: 'rose', label: 'Бордовая', colors: ['#4a303b', '#21171d', '#b44158'], end: '#2d2028' },
 ] as const;
 type ThemeId = typeof THEMES[number]['id'];
 type SettingsTab = 'appearance' | 'sounds';

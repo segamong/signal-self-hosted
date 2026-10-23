@@ -21,4 +21,11 @@
 .call-notification-settings input[type="range"] { width:100%; height:18px; padding:0; margin:0; accent-color:var(--signal-accent,#5865f2); cursor:pointer; background:transparent; }
 .call-system-notifications { padding-top:14px; border-top:1px solid var(--signal-border,#41434a); }
 .call-sound-feedback { color:var(--signal-heading,#f2f3f5); background:var(--signal-accent-soft,#5865f226); border-radius:4px; padding:9px; }
+.custom-call-audio { display:flex; flex-direction:column; gap:8px; padding-top:1px; }
+.custom-call-audio-actions { display:flex; flex-wrap:wrap; gap:8px; }
+.custom-call-audio-actions .button { min-height:29px; padding:6px 9px; font-size:10px; }
+.call-notification-settings .custom-audio-delete { color:var(--signal-danger,#fa777c); }
+.call-notification-settings .custom-audio-error { font-size:11px; line-height:1.5; color:var(--signal-danger,#fa777c); overflow-wrap:anywhere; }
+.call-notification-settings .custom-audio-status { font-size:10px; }
+.call-melody-controls select:disabled { opacity:.55; cursor:wait; }
 @media(max-width:420px) { .call-notification-settings:not(.compact) { padding:13px; }.call-melody-controls { gap:7px; }.call-melody-controls>.call-preview-button { flex-basis:97px; font-size:11px; padding:7px; } }

@@ -10,13 +10,22 @@
 .voice-member-preview { display:flex; gap:8px; align-items:center; padding:4px 8px 4px 35px; color:var(--signal-muted,#949ba4); font-size:12px; overflow:hidden; text-overflow:ellipsis; }
 .voice-member-preview>span { display:grid; place-items:center; width:23px; height:23px; flex:0 0 23px; border-radius:50%; background:var(--signal-accent,#5865f2); color:#fff; font-size:10px; }
 .workspace-voice-group { margin-bottom:2px; }
-.user-panel.with-personal-audio { gap:4px; padding:8px 6px; }
+.server-rail { padding-bottom:8px; }
+.server-rail .rail-bottom { padding-bottom:0; }
+.user-panel.with-personal-audio { height:64px; min-height:64px; gap:4px; padding:8px 6px; }
 .user-panel .user-identity { display:flex; flex-direction:column; gap:3px; flex:1; min-width:0; color:inherit; text-align:left; padding:3px 2px; border-radius:3px; }
 .user-panel .user-identity:hover { background:var(--signal-hover,#35373c); }
 .user-panel .user-identity strong { display:block; width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .user-panel .user-identity>span { display:flex; align-items:center; gap:4px; font-size:9px; white-space:nowrap; color:var(--signal-muted,#949ba4); }
-.user-panel.with-personal-audio>.icon-btn { width:27px; flex:0 0 27px; }
-.user-panel.with-personal-audio>.avatar { width:30px; height:30px; flex:0 0 30px; font-size:12px; }
+.user-panel .user-identity-combined { height:48px; min-height:48px; flex-direction:row; align-items:center; gap:8px; padding:6px; border-radius:8px; background:transparent; transition:background-color 150ms ease,box-shadow 150ms ease; }
+.user-panel .user-identity-combined:hover { background:var(--signal-identity-gradient,var(--signal-hover,#35373c)); box-shadow:inset 0 0 0 1px var(--signal-icon-ring,#ffffff0c); }
+.user-panel .user-identity-combined:focus-visible { outline:2px solid var(--signal-focus,#00a8fc); outline-offset:2px; background:var(--signal-identity-gradient,var(--signal-hover,#35373c)); }
+.user-panel .user-identity-combined>.avatar { width:32px; height:32px; flex:0 0 32px; justify-content:center; color:#fff; font-size:12px; }
+.user-panel .user-identity-combined>.user-identity-copy { display:flex; flex-direction:column; align-items:flex-start; gap:3px; min-width:0; margin:0; flex:1; }
+.user-panel .user-identity-copy strong { color:var(--signal-heading,#f2f3f5); font-size:13px; line-height:16px; }
+.user-panel .user-identity-copy small { display:flex; align-items:center; gap:4px; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--signal-muted,#949ba4); font-size:10px; line-height:13px; }
+.user-panel .user-identity-copy .green-dot { flex:0 0 6px; }
+.user-panel.with-personal-audio>.icon-btn { width:27px; height:40px; flex:0 0 27px; }
 .friends-home { display:flex; flex:1; min-height:0; flex-direction:column; background:var(--signal-bg,#313338); color:var(--signal-text,#dbdee1); }
 .friends-tabs { display:flex; flex-wrap:wrap; gap:8px; padding:12px 18px; align-items:center; min-height:55px; flex-shrink:0; border-bottom:1px solid var(--signal-border,#45474e); }
 .friends-tab-title { display:flex; align-items:center; gap:10px; font-weight:600; color:var(--signal-heading,#f2f3f5); }
