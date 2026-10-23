@@ -31,7 +31,7 @@ function apiTarget(value, method) {
       if (before !== null && !/^[1-9]\d{0,14}$/.test(before)) permitted = false;
     } else if (url.search) permitted = false;
   } else if (method === 'POST' && !url.search) {
-    permitted = /^\/api\/(login|register|logout|channels)$/.test(pathname)
+    permitted = /^\/api\/(login|register|logout|channels|direct-channels)$/.test(pathname)
       || new RegExp(`^/api/channels/${ID}/(messages|join|invites|invitations|settings|leave|delete)$`).test(pathname)
       || new RegExp(`^/api/channels/${ID}/members/${ID}$`).test(pathname)
       || new RegExp(`^/api/channels/${ID}/messages/[1-9]\\d{0,14}/action$`).test(pathname)
