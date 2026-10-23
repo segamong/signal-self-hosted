@@ -18,6 +18,8 @@ import {FriendsHome,EMPTY_FRIENDS,type Friend,type FriendsState,type DirectCall}
 import {ThemeMenu} from './ThemeMenu';
 import {PersonalAudioControls} from './PersonalAudioControls';
 import {syncIncomingCallNotifications,clearCallNotifications,CallNotificationSettings} from './callNotifications';
+import {HeaderSearch,type SearchMessage} from './HeaderSearch';
+import {PasswordChangeForm} from './PasswordChangeForm';
 const CallStage = lazy(() => import('./CallStage'));
 const themeReady = window.signalAndroidBridge ? Promise.resolve() : import('./discord.css').then(()=>import('./community-ui.css'));
 type Workspace = {id:string;name:string;description:string;ownerId:string;role:'owner'|'admin'|'member'};
@@ -97,6 +99,8 @@ function App() {
     const friendMutation=useRef(false),ringMutation=useRef(false),handledRings=useRef(new Set<string>()),authorizedRings=useRef(new Set<string>()),pendingCallPeers=useRef(new Set<string>()),knownCalls=useRef(new Map<string,DirectCall>()),connectedRing=useRef<string|null>(null),socialRevision=useRef(0);
     const [newChannelType,setNewChannelType]=useState<'text'|'voice'>('text');
     const [messages, setMessages] = useState<Message[]>([]), [hasMore, setHasMore] = useState(false), [loading, setLoading] = useState(false);
+    const [messageAnchor,setMessageAnchor]=useState<{channelId:string;id:number}|null>(null),messageAnchorRef=useRef(messageAnchor),messageAnchorFocus=useRef('');
+    messageAnchorRef.current=messageAnchor;
     const [online, setOnline] = useState<User[]>([]), [socketLive, setSocketLive] = useState(false), [rooms, setRooms] = useState<RoomInfo[]>([]);
     const [call, setCall] = useState<Channel | null>(null), [membersOpen, setMembersOpen] = useState(() => window.matchMedia('(min-width: 1100px)').matches), [sidebarOpen, setSidebarOpen] = useState(false);
     const [channelsLoaded, setChannelsLoaded] = useState(false), [initialCallPreferences, setInitialCallPreferences] = useState<CallPreferences>(DEFAULT_CALL_PREFERENCES);
@@ -196,9 +200,16 @@ function App() {
         setCall(next);
         androidCommand({type:'openCall',channelId:next.id,channelName:next.name});
     }
-    function selectChannel(next:Channel){setSelected(next.id);setWorkspaceId(next.kind==='direct'?'':next.workspaceId||'');setSidebarOpen(false);}
-    function goHome(){setSelected('');setWorkspaceId('');setSidebarOpen(false);}
-    function openWorkspace(next:Workspace){setWorkspaceId(next.id);setSelected(channels.find(item=>item.workspaceId===next.id&&item.channelType==='text')?.id||'');setSidebarOpen(false);}
+    function selectChannel(next:Channel){setMessageAnchor(null);setSelected(next.id);setWorkspaceId(next.kind==='direct'?'':next.workspaceId||'');setSidebarOpen(false);}
+    function goHome(){setMessageAnchor(null);setSelected('');setWorkspaceId('');setSidebarOpen(false);}
+    function openWorkspace(next:Workspace){setMessageAnchor(null);setWorkspaceId(next.id);setSelected(channels.find(item=>item.workspaceId===next.id&&item.channelType==='text')?.id||'');setSidebarOpen(false);}
+    function openSearchMessage(message:SearchMessage){
+        const next=channels.find(item=>item.id===message.channelId);
+        if(!next){setError('У вас больше нет доступа к этому каналу.');return;}
+        if(!Number.isSafeInteger(message.id)||message.id<1||message.id>=999999999999999){selectChannel(next);setError('Открыт канал. Переход к этому сообщению недоступен.');return;}
+        messageAnchorFocus.current='';selectChannel(next);setMessages([]);setLoading(true);setMessageAnchor({channelId:next.id,id:message.id});
+    }
+    useEffect(()=>{setMessageAnchor(old=>old&&old.channelId!==selected?null:old);},[selected]);
     function openChannelCreation(type:'text'|'voice'){setNewChannelType(type);setModal('channel');}
     useEffect(()=>{if(channel)setWorkspaceId(channel.kind==='direct'?'':channel.workspaceId||'');},[selected,channel?.workspaceId,channel?.kind]);
     async function refreshCommunity(accountId:string){
@@ -382,6 +393,7 @@ function App() {
             setSelected('');
             setWorkspaceId('');setWorkspaces([]);setFriends(EMPTY_FRIENDS);setFriendBusy(null);setDirectCalls([]);setRingBusy(false);authorizedRings.current.clear();pendingCallPeers.current.clear();knownCalls.current.clear();handledRings.current.clear();connectedRing.current=null;socialRevision.current++;
             setMessages([]);
+            setMessageAnchor(null);
             messageOverrides.current.clear();
             deletedMessageIds.current.clear();
             setOnline([]);
@@ -472,15 +484,16 @@ function App() {
         let stopped = false, socket: WebSocket | undefined, retry: ReturnType<typeof setTimeout> | undefined, attempts = 0;
         const syncMessages = () => {
             const id = selectedRef.current;
+            const anchor=messageAnchorRef.current?.channelId===id?messageAnchorRef.current:null;
             messageOverrides.current.clear();
             if (!id)
                 return;
             api<{
                 messages: Message[];
                 hasMore: boolean;
-            }>(`/channels/${encodeURIComponent(id)}/messages`).then(data => {
-                if (!stopped && selectedRef.current === id) {
-                    setMessages(mergeMessages(data.messages, [...messageOverrides.current.values()].filter(message => message.channelId === id)));
+            }>(`/channels/${encodeURIComponent(id)}/messages${anchor?`?before=${anchor.id+1}`:''}`).then(data => {
+                if (!stopped && selectedRef.current === id && messageAnchorRef.current?.id===anchor?.id) {
+                    setMessages(mergeMessages(data.messages, [...messageOverrides.current.values()].filter(message => message.channelId === id&&(!anchor||message.id<=anchor.id))));
                     setHasMore(data.hasMore);
                     setMessageRevision(value => value + 1);
                 }
@@ -511,7 +524,7 @@ function App() {
             if (data.type === 'direct-call') {socialRevision.current++;receiveDirectCall(data.call,data.channel);}
             if (data.type === 'message-updated') updateMessage(data.message);
             if (data.type === 'message-deleted') deleteMessage(data.messageId);
-            if (data.type === 'message' && data.message.channelId === selectedRef.current) {
+            if (data.type === 'message' && data.message.channelId === selectedRef.current && !messageAnchorRef.current) {
                 messageOverrides.current.set(data.message.id, newestMessage(messageOverrides.current.get(data.message.id), data.message));
                 const pane = historyRef.current;
                 scrollNext.current = !pane || pane.scrollHeight - pane.scrollTop - pane.clientHeight < 130;
@@ -568,20 +581,24 @@ function App() {
         return () => { stopped = true; clearTimeout(retry); socket?.close(); setSocketLive(false); };
     }, [user]);
     useEffect(() => {
+        setDraft('');
+    },[selected,user]);
+    useEffect(() => {
         setMessages([]);
         setHasMore(false);
-        setDraft('');
+        olderScroll.current=null;
         if (!user || !selected) {
             setLoading(false);
             return;
         }
         setLoading(true);
         const version = ++requestVersion.current;
-        scrollNext.current = true;
+        const anchor=messageAnchor?.channelId===selected?messageAnchor:null;
+        scrollNext.current = !anchor;
         api<{
             messages: Message[];
             hasMore: boolean;
-        }>(`/channels/${encodeURIComponent(selected)}/messages`).then(data => {
+        }>(`/channels/${encodeURIComponent(selected)}/messages${anchor?`?before=${anchor.id+1}`:''}`).then(data => {
             if (version !== requestVersion.current)
                 return;
             setMessages(old => mergeMessages(data.messages, old));
@@ -594,7 +611,7 @@ function App() {
                 setLoading(false);
         });
         return () => { requestVersion.current++; };
-    }, [selected, user]);
+    }, [selected, user,messageAnchor?.channelId,messageAnchor?.id]);
     useEffect(() => { setChannelMembers([]); if (!user || !selected)
         return; let stopped = false; const refresh = () => api<{
         members: {
@@ -609,8 +626,12 @@ function App() {
         if (olderScroll.current && historyRef.current) {
             historyRef.current.scrollTop = olderScroll.current.top + historyRef.current.scrollHeight - olderScroll.current.height;
             olderScroll.current = null;
+            return;
         }
-    }, [messages]);
+        if(!messageAnchor){messageAnchorFocus.current='';return;}
+        const anchorKey=`${messageAnchor.channelId}:${messageAnchor.id}`;
+        if(!loading&&messageAnchorFocus.current!==anchorKey){const target=historyRef.current?.querySelector<HTMLElement>(`[data-message-id="${messageAnchor.id}"]`);if(target){target.scrollIntoView({block:'center',behavior:'smooth'});target.focus({preventScroll:true});messageAnchorFocus.current=anchorKey;}}
+    }, [messages,loading,messageAnchor]);
     useEffect(() => {
         if (scrollNext.current) {
             bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -620,7 +641,7 @@ function App() {
     async function send(event: FormEvent) {
         event.preventDefault();
         const originalDraft = draft, content = draft.trim(), id = selected;
-        if (!content || sending || !id)
+        if (!content || sending || !id || messageAnchorRef.current)
             return;
         setSending(true);
         try {
@@ -630,12 +651,11 @@ function App() {
             if (selectedRef.current === id) {
                 messageOverrides.current.set(message.id, newestMessage(messageOverrides.current.get(message.id), message));
                 setDraft(current => current === originalDraft ? '' : current);
-                scrollNext.current = true;
-                setMessages(old => mergeMessages(old, [message]));
+                if(!messageAnchorRef.current){scrollNext.current = true;setMessages(old => mergeMessages(old, [message]));}
             }
         }
         catch (e) {
-            setError((e as Error).message);
+            if(selectedRef.current===id)setError((e as Error).message);
         }
         finally {
             setSending(false);
@@ -645,13 +665,14 @@ function App() {
         if (!messages.length)
             return;
         const id = selected;
+        const anchorId=messageAnchorRef.current?.id;
         setLoading(true);
         try {
             const data = await api<{
                 messages: Message[];
                 hasMore: boolean;
             }>(`/channels/${encodeURIComponent(id)}/messages?before=${messages[0].id}`);
-            if (selectedRef.current === id) {
+            if (selectedRef.current === id&&messageAnchorRef.current?.id===anchorId) {
                 scrollNext.current = false;
                 if (historyRef.current)
                     olderScroll.current = { height: historyRef.current.scrollHeight, top: historyRef.current.scrollTop };
@@ -660,10 +681,10 @@ function App() {
             }
         }
         catch (e) {
-            setError((e as Error).message);
+            if(selectedRef.current===id&&messageAnchorRef.current?.id===anchorId)setError((e as Error).message);
         }
         finally {
-            setLoading(false);
+            if(selectedRef.current===id&&messageAnchorRef.current?.id===anchorId)setLoading(false);
         }
     }
     function createInvite() {
@@ -933,11 +954,12 @@ function App() {
         <div className={`user-panel${webDesktop?' with-personal-audio':''}`}><Avatar user={user} small/><button className="user-identity" onClick={()=>setModal('settings')} title="Профиль и настройки приложения"><strong>{user.username}</strong><span><i className="green-dot"/>{socketLive ? 'В сети' : 'Переподключение…'}</span></button>{webDesktop?<PersonalAudioControls/>:<button className="icon-btn" onClick={() => setModal('settings')} title="Настройки приложения" aria-label="Настройки приложения"><Settings size={18}/></button>}<button className="icon-btn" onClick={logout} title="Выйти из аккаунта" aria-label="Выйти из аккаунта"><LogOut size={18}/></button></div>
       </aside>
       <main className="main-panel">
-        <header className="channel-header">
+        <header className={`channel-header${webDesktop?' with-header-search':''}`}>
           <button className="icon-btn mobile-menu" aria-label="Открыть меню" onClick={() => setSidebarOpen(true)}><Menu size={22}/></button>
           {isHome?<Users size={23}/>:isDirect ? <AtSign size={23}/> : channel?.channelType==='voice'?<Volume2 size={23}/>:<Hash size={23}/>}<strong>{isHome?'Главная':channel?selectedLabel:workspace?.name||selectedLabel}</strong>
           <span className="header-divider"/><span className="channel-description">{isHome?'Ваши друзья и личные разговоры':isDirect ? 'Личный разговор · только вы вдвоём' : channel?.description || workspace?.description || 'Ваше личное пространство'}</span>
           <div className="header-actions">
+            {webDesktop&&<HeaderSearch key={user.id} accountId={user.id} channels={channels} friends={friends.friends} currentChannel={channel} deletedMessageIds={deletedMessageIds.current} onChannel={selectChannel} onFriend={friend=>void openFriendChat(friend)} onMessage={openSearchMessage}/>}
             {isDirect && channel && <button className="icon-btn direct-call-button" title="Начать личный звонок" aria-label="Начать личный звонок" disabled={ringBusy} onClick={() => channel.peer&&friends.friends.some(item=>item.id===channel.peer!.id)?void callFriend(channel.peer):startCall(channel)}><Phone size={21}/></button>}
             {channel && <button className="icon-btn" title="Закреплённые сообщения" aria-label="Закреплённые сообщения" onClick={() => setModal('pins')}><Pin size={19}/></button>}
             {channel && <button className="icon-btn" title={isDirect ? 'О личном разговоре' : 'Управление каналом'} aria-label={isDirect ? 'О личном разговоре' : 'Управление каналом'} onClick={() => { setConfirmDirectLeave(false); setModal(isDirect ? 'direct-info' : 'channel-settings'); }}>{isDirect ? <Info size={20}/> : <Settings size={20}/>}</button>}
@@ -956,6 +978,7 @@ function App() {
             <span className="account-note"><ShieldCheck size={16}/>Все ваши каналы сохраняются в аккаунте</span>
           </div> : <>
             {directNotice?.channelId === channel.id && channelMembers.length < 2 && <div className="direct-pending-notice" role="status"><MessageSquare size={17}/><span>{directNotice.message}</span><button className="icon-btn" aria-label="Скрыть уведомление" onClick={() => setDirectNotice(null)}><X size={16}/></button></div>}
+            {messageAnchor?.channelId===channel.id&&<div className="message-context-banner" role="status"><span>{loading?'Открываем найденное сообщение…':messages.some(item=>item.id===messageAnchor.id)?'Найденное сообщение и предыдущая переписка.':'Сообщение больше недоступно или было удалено.'}</span><button onClick={()=>setMessageAnchor(null)}>К последним сообщениям</button></div>}
             <div className="message-history" ref={historyRef} role="log" aria-label={isDirect ? `Личный разговор с ${selectedLabel}` : `Сообщения канала ${selectedLabel}`} aria-live="polite">
               <div className={`welcome${isDirect ? ' direct-welcome' : ''}`}>
                 <span className="welcome-symbol">{isDirect ? <AtSign size={34}/> : <Hash size={34}/>}</span>
@@ -971,7 +994,7 @@ function App() {
               {!loading && messages.length === 0 && <div className="empty-chat"><MessageSquare size={22}/><div><strong>Пока тихо. Начните разговор.</strong><span>Напишите что-нибудь — {isDirect ? 'собеседник увидит' : 'остальные увидят'} это сразу.</span></div></div>}
               {messages.map((message, index) => {
                 const previous = messages[index - 1], grouped = previous && previous.user.id === message.user.id && new Date(message.createdAt).getTime() - new Date(previous.createdAt).getTime() < 300000;
-                return <article className={`message ${grouped ? 'grouped' : ''}`} key={message.id}>
+                return <article className={`message ${grouped ? 'grouped' : ''}${messageAnchor?.id===message.id?' message-search-target':''}`} data-message-id={message.id} tabIndex={messageAnchor?.id===message.id?-1:undefined} key={message.id}>
                   {!grouped ? <Avatar user={message.user}/> : <span className="message-short-time">{new Date(message.createdAt).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}</span>}
                   <div className="message-body">{!grouped && <div className="message-author"><strong>{message.user.username}</strong><time dateTime={message.createdAt}>{new Date(message.createdAt).toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</time></div>}
                     <MessageContent message={message} currentUserId={user.id} canModerate={canManageChannel} onUpdated={updateMessage} onDeleted={deleteMessage} onError={setError}/>
@@ -979,12 +1002,12 @@ function App() {
                 </article>;
               })}<div ref={bottomRef}/>
             </div>
-            <div className="composer-wrap"><form className="composer" onSubmit={send}>
+            {messageAnchor?<div className="message-context-composer-note">Вы просматриваете результат поиска.<button onClick={()=>setMessageAnchor(null)}>Вернуться к переписке</button></div>:<div className="composer-wrap"><form className="composer" onSubmit={send}>
               <textarea aria-label="Сообщение" placeholder={isDirect?`Сообщение ${selectedLabel}`:`Написать в ${selectedLabel}`} value={draft} onChange={event => setDraft(event.target.value)} maxLength={4000} rows={1} onKeyDown={event => {
                 if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); }
               }}/>
               <button type="submit" className="send-button" title="Отправить" aria-label="Отправить сообщение" disabled={!draft.trim() || sending}><Send size={18}/></button>
-            </form><span className="composer-hint"><span><b>Enter</b> — отправить <span className="hint-dot">·</span><b>Shift + Enter</b> — новая строка</span><span>{draft.length > 3500 ? `${draft.length}/4000` : 'Будьте на своей волне'}</span></span></div>
+            </form><span className="composer-hint"><span><b>Enter</b> — отправить <span className="hint-dot">·</span><b>Shift + Enter</b> — новая строка</span><span>{draft.length > 3500 ? `${draft.length}/4000` : 'Будьте на своей волне'}</span></span></div>}
           </>}
         </div>
         {membersOpen && channel && <aside className="members-panel"><div className="members-title">УЧАСТНИКИ<span>{channelMembers.length}</span></div>
@@ -1024,7 +1047,7 @@ function App() {
         {modal === 'workspace'&&webDesktop&&<><h2>Создать сервер</h2><p>Соберите друзей в одном месте. Внутри можно создать несколько текстовых и голосовых каналов.</p><form onSubmit={createWorkspace}><label>Название сервера<input name="name" required maxLength={40} placeholder="Например, Свой круг"/></label><label>Описание<input name="description" maxLength={180} placeholder="Место для ваших разговоров"/></label><button className="primary full" disabled={modalBusy}>{modalBusy?'Создаём…':'Создать сервер'}<Plus size={17}/></button></form></>}
         {modal === 'channel' && <><h2>{webDesktop?'Создать канал':'Ещё одно место для общения'}</h2><form onSubmit={createChannel}><p>{webDesktop?`Новый канал на сервере «${workspace?.name||'Свой круг'}». Доступ получат его участники.`:'Вы станете владельцем канала и сможете приглашать участников. Внутри — чат, голос, видео и показ экрана.'}</p>{webDesktop&&<fieldset className="channel-type-picker"><legend>Тип канала</legend><label className={newChannelType==='text'?'active':''}><input type="radio" name="channelType" value="text" checked={newChannelType==='text'} onChange={()=>setNewChannelType('text')}/><Hash size={23}/><span><strong>Текстовый</strong><small>Сообщения и обсуждения</small></span></label><label className={newChannelType==='voice'?'active':''}><input type="radio" name="channelType" value="voice" checked={newChannelType==='voice'} onChange={()=>setNewChannelType('voice')}/><Volume2 size={23}/><span><strong>Голосовой</strong><small>Голос, видео и экран · до 10 участников</small></span></label></fieldset>}<label>Название<input name="name" required maxLength={40} placeholder={newChannelType==='voice'?'Например, Гостиная':'Например, общий'}/></label><label>Описание<input name="description" maxLength={180} placeholder="О чём будем говорить?"/></label><button className="primary full" disabled={modalBusy}>{modalBusy ? 'Создаём…' : 'Создать канал'}<Plus size={17}/></button></form></>}
         {modal === 'join' && <><h2>Вступить в канал</h2><p>Приглашение добавит сервер и его текстовые и голосовые каналы в ваш аккаунт.</p><form onSubmit={previewInvite}><label>Ссылка или код приглашения<input value={joinValue} onChange={event => { setJoinValue(event.target.value); setInviteInfo(null); setJoinError(''); }} placeholder="signal://invite/…" autoComplete="off" maxLength={256} required/></label><button className="secondary full" disabled={modalBusy || !joinValue.trim()}>{modalBusy ? 'Подождите…' : 'Посмотреть канал'}<ArrowRight size={17}/></button></form>{inviteInfo && <div className="invite-preview"><Hash size={24}/><div><strong>{inviteInfo.channel.name}</strong><span>{channels.some(item => item.id === inviteInfo.channel.id) ? 'Вы уже участник' : inviteInfo.valid ? 'Приглашение действительно' : 'Срок или число вступлений исчерпаны'}</span></div></div>}{inviteInfo && (inviteInfo.valid || channels.some(item => item.id === inviteInfo.channel.id)) && <button className="primary full" disabled={modalBusy} onClick={joinChannel}>{channels.some(item => item.id === inviteInfo.channel.id) ? 'Открыть канал' : 'Принять приглашение'}<Check size={17}/></button>}{joinError && <p className="form-error" role="alert">{joinError}</p>}</>}
-        {modal === 'settings' && <><h2>Ваш Сигнал</h2><p>Вы вошли как <strong>@{user.username}</strong>. Каналы и переписка хранятся на вашем сервере.</p>{window.signalDesktop && <div className="desktop-settings"><label><input type="checkbox" checked={desktopSettings.openAtLogin} onChange={event => void saveDesktopSetting('openAtLogin', event.target.checked)}/><span>Запускать вместе с Windows</span></label><label><input type="checkbox" checked={desktopSettings.closeToTray} onChange={event => void saveDesktopSetting('closeToTray', event.target.checked)}/><span>При закрытии оставаться в трее</span></label><p>Для полного выхода используйте меню Сигнала в трее.</p></div>}{webDesktop&&<CallNotificationSettings/>}<DesktopUpdates/>{window.signalAndroidBridge && <button className="secondary full" onClick={() => androidCommand({type:'checkUpdate'})}><Download size={17}/>Проверить обновления Android</button>}<div className="server-address"><ShieldCheck size={17}/><span>Сервер: {SERVER_ORIGIN}</span></div><p className="modal-footnote">Камера, микрофон, устройства и качество трансляции настраиваются в голосовой комнате.</p></>}
+        {modal === 'settings' && <><h2>Ваш Сигнал</h2><p>Вы вошли как <strong>@{user.username}</strong>. Каналы и переписка хранятся на вашем сервере.</p>{window.signalDesktop && <div className="desktop-settings"><label><input type="checkbox" checked={desktopSettings.openAtLogin} onChange={event => void saveDesktopSetting('openAtLogin', event.target.checked)}/><span>Запускать вместе с Windows</span></label><label><input type="checkbox" checked={desktopSettings.closeToTray} onChange={event => void saveDesktopSetting('closeToTray', event.target.checked)}/><span>При закрытии оставаться в трее</span></label><p>Для полного выхода используйте меню Сигнала в трее.</p></div>}{webDesktop&&<PasswordChangeForm key={user.id} username={user.username}/>}{webDesktop&&<CallNotificationSettings/>}<DesktopUpdates/>{window.signalAndroidBridge && <button className="secondary full" onClick={() => androidCommand({type:'checkUpdate'})}><Download size={17}/>Проверить обновления Android</button>}<div className="server-address"><ShieldCheck size={17}/><span>Сервер: {SERVER_ORIGIN}</span></div><p className="modal-footnote">Камера, микрофон, устройства и качество трансляции настраиваются в голосовой комнате.</p></>}
       </section></div>}
     </div>;
 }

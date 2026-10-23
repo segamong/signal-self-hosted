@@ -21,6 +21,9 @@
   --signal-danger: #fa777c;
   --signal-warning: #f0b232;
   --signal-call-bg: var(--signal-deep);
+  --signal-app-gradient: linear-gradient(155deg, #34363c, #2f3136);
+  --signal-panel-gradient: linear-gradient(165deg, #2e3035, #292b2f);
+  --signal-call-gradient: linear-gradient(165deg, #23252a, #1c1e22);
   --signal-overlay: #0009;
   --signal-shadow: 0 12px 42px #0006;
   --accent: var(--signal-accent);
@@ -42,6 +45,9 @@
   --signal-input: #090d16; --signal-hover: #20283a; --signal-selected: #2c3650; --signal-border: #34405a;
   --signal-text: #dce3f1; --signal-heading: #f5f7ff; --signal-muted: #a0aec5; --signal-interactive: #bdcbe2;
   --signal-accent: #5269db; --signal-accent-hover: #4358bf; --signal-accent-soft: #5269db26;
+  --signal-app-gradient: linear-gradient(155deg, #192033, #141a28);
+  --signal-panel-gradient: linear-gradient(165deg, #131a28, #0f1520);
+  --signal-call-gradient: linear-gradient(165deg, #0d1320, #080c15);
 }
 :root[data-signal-theme="light"] {
   color-scheme: light;
@@ -51,12 +57,18 @@
   --signal-accent: #4752c4; --signal-accent-hover: #3942a5; --signal-accent-soft: #4752c416;
   --signal-focus: #005dcc; --signal-success: #1e7447; --signal-danger: #b12737;
   --signal-warning: #8c5d06; --signal-overlay: #1e24336b; --signal-shadow: 0 12px 42px #14213d26;
+  --signal-app-gradient: linear-gradient(155deg, #ffffff, #f6f7fa);
+  --signal-panel-gradient: linear-gradient(165deg, #f5f6f8, #eceef2);
+  --signal-call-gradient: linear-gradient(165deg, #e9ebef, #dfe2e8);
 }
 :root[data-signal-theme="violet"] {
   --signal-bg: #30283e; --signal-panel: #272134; --signal-deep: #1c1727; --signal-dock: #211b2c;
   --signal-input: #1c1727; --signal-hover: #3b314c; --signal-selected: #4b3d60; --signal-border: #5b4b70;
   --signal-text: #e4ddeb; --signal-heading: #fcf6ff; --signal-muted: #b8aac8; --signal-interactive: #cec0de;
   --signal-accent: #7659d5; --signal-accent-hover: #6348b9; --signal-accent-soft: #7659d526;
+  --signal-app-gradient: linear-gradient(155deg, #352c44, #2e263c);
+  --signal-panel-gradient: linear-gradient(165deg, #2b2439, #251f32);
+  --signal-call-gradient: linear-gradient(165deg, #211b2e, #1a1625);
 }
 :root[data-signal-theme="forest"] {
   --signal-bg: #22352f; --signal-panel: #1b2b25; --signal-deep: #101e1a; --signal-dock: #16251f;
@@ -64,12 +76,18 @@
   --signal-text: #d8e9e0; --signal-heading: #f2fff7; --signal-muted: #a7c2b4; --signal-interactive: #bfd8c9;
   --signal-accent: #287858; --signal-accent-hover: #216548; --signal-accent-soft: #45ae7d26;
   --signal-focus: #73d0a4;
+  --signal-app-gradient: linear-gradient(155deg, #263b34, #20322c);
+  --signal-panel-gradient: linear-gradient(165deg, #1e3028, #192923);
+  --signal-call-gradient: linear-gradient(165deg, #14251e, #0e1c17);
 }
 :root[data-signal-theme="rose"] {
   --signal-bg: #38272e; --signal-panel: #2e2027; --signal-deep: #21171d; --signal-dock: #281b22;
   --signal-input: #21171d; --signal-hover: #473039; --signal-selected: #5a3c47; --signal-border: #72525e;
   --signal-text: #ecdee3; --signal-heading: #fff5f8; --signal-muted: #c6abb5; --signal-interactive: #ddc0ca;
   --signal-accent: #b44158; --signal-accent-hover: #9d354b; --signal-accent-soft: #b4415826;
+  --signal-app-gradient: linear-gradient(155deg, #3e2a32, #35252d);
+  --signal-panel-gradient: linear-gradient(165deg, #32222a, #2b1e25);
+  --signal-call-gradient: linear-gradient(165deg, #281b22, #1f151b);
 }
 
 /* Override the original fixed dark palette without tinting video or avatars. */
@@ -108,7 +126,8 @@
 :root[data-signal-theme] .call-settings .voice-preset-buttons button:hover:not(:disabled) { background: var(--signal-selected); }
 :root[data-signal-theme] :is(.checkbox-label input,.call-settings .voice-switches input[type=checkbox],input[type=range]) { accent-color: var(--signal-accent); }
 :root[data-signal-theme] .call-settings-drawer>header .icon-btn { color: var(--signal-interactive); background: var(--signal-hover); }
-:root[data-signal-theme] :is(.call-stage,.call-toolbar) { background: var(--signal-call-bg); }
+:root[data-signal-theme] .call-stage { background-color: var(--signal-call-bg); background-image: var(--signal-call-gradient); }
+:root[data-signal-theme] .call-stage > .call-toolbar { background: transparent; }
 :root[data-signal-theme] :is(.toolbar-main,.toolbar-note) { background: transparent; }
 :root[data-signal-theme] .toolbar-divider { background: var(--signal-border); }
 :root[data-signal-theme] :is(.call-heading h2,.call-heading .call-count) { color: var(--signal-heading); }
@@ -135,6 +154,14 @@
 :root[data-signal-theme] .direct-pending-notice { background: var(--signal-accent-soft); color: var(--signal-text); }
 :root[data-signal-theme] .message-history { scrollbar-color: var(--signal-deep) var(--signal-panel); }
 :root[data-signal-theme] .sidebar-scroll { scrollbar-color: var(--signal-deep) transparent; }
+
+/* Gentle shifts of one hue belong to app surfaces. Inputs, video frames and
+   media overlays remain flat, and the call controls reveal the same surface. */
+:root[data-signal-theme] :is(.main-panel,.account-welcome,.friends-home,.friends-page,.home-panel,.auth-main) { background-image: var(--signal-app-gradient); }
+:root[data-signal-theme] :is(.channel-sidebar,.members-panel,.call-settings-drawer,.theme-menu-popup) { background-image: var(--signal-panel-gradient); }
+:root[data-signal-theme] :is(.channel-header,.composer-wrap) { background: transparent; }
+:root[data-signal-theme] .composer textarea { background: transparent; background-image: none; }
+:root[data-signal-theme] .call-settings-drawer .call-settings { background: transparent; }
 
 /* The palette also covers secondary surfaces, popovers and the complete call
    footer. Video frames and their dark caption overlays stay neutral. */

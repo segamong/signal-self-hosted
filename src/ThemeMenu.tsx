@@ -5,12 +5,12 @@ import './themes.css';
 
 const STORAGE_KEY = 'signal:appearance-theme:v1';
 const THEMES = [
-  { id: 'dark', label: 'Тёмная', colors: ['#313338', '#1e1f22', '#5865f2'] },
-  { id: 'midnight', label: 'Полночь', colors: ['#161b27', '#090d16', '#5269db'] },
-  { id: 'light', label: 'Светлая', colors: ['#ffffff', '#e3e5e8', '#4752c4'] },
-  { id: 'violet', label: 'Фиолетовая', colors: ['#30283e', '#1c1727', '#7659d5'] },
-  { id: 'forest', label: 'Зелёная', colors: ['#22352f', '#101e1a', '#287858'] },
-  { id: 'rose', label: 'Бордовая', colors: ['#38272e', '#21171d', '#b44158'] },
+  { id: 'dark', label: 'Тёмная', colors: ['#34363c', '#1e1f22', '#5865f2'], end: '#2f3136' },
+  { id: 'midnight', label: 'Полночь', colors: ['#192033', '#090d16', '#5269db'], end: '#141a28' },
+  { id: 'light', label: 'Светлая', colors: ['#ffffff', '#e3e5e8', '#4752c4'], end: '#f6f7fa' },
+  { id: 'violet', label: 'Фиолетовая', colors: ['#352c44', '#1c1727', '#7659d5'], end: '#2e263c' },
+  { id: 'forest', label: 'Зелёная', colors: ['#263b34', '#101e1a', '#287858'], end: '#20322c' },
+  { id: 'rose', label: 'Бордовая', colors: ['#3e2a32', '#21171d', '#b44158'], end: '#35252d' },
 ] as const;
 type ThemeId = typeof THEMES[number]['id'];
 
@@ -96,7 +96,7 @@ export function ThemeMenu() {
       <header><h2 id={`${id}-title`}><Palette size={18} />Тема приложения</h2><button className="icon-btn" aria-label="Закрыть выбор темы" onClick={() => { setOpen(false); anchor.current?.focus(); }}><X size={18} /></button></header>
       <fieldset><legend>Цвет оформления</legend><div className="theme-choice-grid">{THEMES.map(option => <label className={`theme-choice${theme === option.id ? ' selected' : ''}`} key={option.id}>
         <input type="radio" name={`${id}-theme`} value={option.id} checked={theme === option.id} onChange={() => setTheme(option.id)} />
-        <span className="theme-choice-preview" aria-hidden="true" style={{ background: option.colors[0], color: option.id === 'light' ? '#30343b' : '#dbdee1' }}><i style={{ background: option.colors[1] }} /><b style={{ background: option.colors[2] }} /><em />{theme === option.id && <Check size={15} />}</span>
+        <span className="theme-choice-preview" aria-hidden="true" style={{ background: `linear-gradient(145deg, ${option.colors[0]}, ${option.end})`, color: option.id === 'light' ? '#30343b' : '#dbdee1' }}><i style={{ background: option.colors[1] }} /><b style={{ background: option.colors[2] }} /><em />{theme === option.id && <Check size={15} />}</span>
         <span>{option.label}</span>
       </label>)}</div></fieldset>
       <p className="theme-selection-status" role="status">Выбрана: <strong>{THEMES.find(option => option.id === theme)?.label}</strong><br />Сохраняется на этом устройстве.</p>

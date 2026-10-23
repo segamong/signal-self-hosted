@@ -16,7 +16,7 @@ function isAppUrl(value, host = 'signal') {
 }
 
 function apiTarget(value, method) {
-  if (typeof value !== 'string' || value.length > 512 || !value.startsWith('/api/') || value.includes('\\') || value.includes('%')) throw new Error('Недопустимый адрес API.');
+  if (typeof value !== 'string' || value.length > 2048 || !value.startsWith('/api/') || value.includes('\\') || value.split('?')[0].includes('%') || /[\u0000-\u001f\u007f]/.test(value)) throw new Error('Недопустимый адрес API.');
   const url = new URL(value, SERVER_ORIGIN);
   if (url.origin !== SERVER_ORIGIN || url.hash || url.username || url.password) throw new Error('Недопустимый адрес API.');
   const pathname = url.pathname;
@@ -25,13 +25,21 @@ function apiTarget(value, method) {
     permitted = /^\/api\/(health|config|me|channels|status|invitations|workspaces|friends|direct-calls)$/.test(pathname)
       || new RegExp(`^/api/invites/${ID}$`).test(pathname)
       || new RegExp(`^/api/channels/${ID}/(members|bans|pins)$`).test(pathname);
-    if (new RegExp(`^/api/channels/${ID}/messages$`).test(pathname)) {
+    if (pathname === '/api/search') {
+      permitted = [...url.searchParams.keys()].every(key => ['q', 'channelId', 'before'].includes(key))
+        && ['q', 'channelId', 'before'].every(key => url.searchParams.getAll(key).length <= 1);
+      const query = url.searchParams.get('q'), channelId = url.searchParams.get('channelId'), before = url.searchParams.get('before');
+      if (query === null || query.trim().length < 2 || query.trim().length > 100
+        || (channelId !== null && !new RegExp(`^${ID}$`).test(channelId))
+        || (before !== null && !/^[1-9]\d{0,14}$/.test(before))) permitted = false;
+    } else if (new RegExp(`^/api/channels/${ID}/messages$`).test(pathname)) {
       permitted = [...url.searchParams.keys()].every((key) => key === 'before') && url.searchParams.getAll('before').length <= 1;
       const before = url.searchParams.get('before');
       if (before !== null && !/^[1-9]\d{0,14}$/.test(before)) permitted = false;
     } else if (url.search) permitted = false;
   } else if (method === 'POST' && !url.search) {
     permitted = /^\/api\/(login|register|logout|channels|direct-channels|workspaces|friend-requests|direct-calls)$/.test(pathname)
+      || pathname === '/api/account/password'
       || new RegExp(`^/api/workspaces/${ID}/channels$`).test(pathname)
       || new RegExp(`^/api/friend-requests/${ID}/respond$`).test(pathname)
       || new RegExp(`^/api/friends/${ID}/remove$`).test(pathname)

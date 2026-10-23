@@ -213,7 +213,7 @@ label { color: #b5bac1; font-size: 12px; font-weight: 700; gap: 8px; }
 .composer { gap: 12px; padding: 9px 12px 9px 16px; background: #383a40; border: 0; border-radius: 8px; min-height: 46px; }
 .composer:focus-within { border: 0; }
 .composer-hash { color: #b5bac1; }
-.composer textarea { padding: 2px 0; border: 0; font-size: 15px; line-height: 1.5; min-height: 26px; color: #dbdee1; }
+.composer textarea { padding: 2px 0; border: 0; background: transparent; font-size: 15px; line-height: 1.5; min-height: 26px; color: #dbdee1; }
 .composer textarea::placeholder { color: #949ba4; }
 .send-button { color: #b5bac1; background: transparent; border-radius: 4px; width: 32px; height: 30px; }
 .send-button:hover:not(:disabled) { color: #fff; background: #5865f2; }
@@ -237,7 +237,8 @@ label { color: #b5bac1; font-size: 12px; font-weight: 700; gap: 8px; }
 .members-footer { display: none; }
 
 /* Voice room, with the active stream and a separate participant strip. */
-.call-stage { padding: 16px 20px 12px; background: var(--signal-call-bg, #1e1f22); border-bottom: 1px solid var(--signal-border, #141518); max-height: 72vh; max-height: 72dvh; min-height: 280px; scrollbar-color: #111214 transparent; container-type: inline-size; container-name: call; }
+.conversation-column.has-call { min-height: 0; }
+.call-stage { position: relative; isolation: isolate; flex: 0 1 auto; padding: 16px 20px 12px; background: var(--signal-call-bg, #1e1f22); border-bottom: 1px solid var(--signal-border, #141518); max-height: 72vh; max-height: 72dvh; min-height: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; scrollbar-color: #111214 transparent; container-type: inline-size; container-name: call; }
 .call-heading { margin-bottom: 14px; gap: 12px; }
 .call-heading h2 { color: #f2f3f5; font-size: 18px; font-weight: 600; margin-top: 5px; }
 .call-connection { color: #949ba4; font-size: 11px; gap: 5px; }
@@ -287,7 +288,9 @@ label { color: #b5bac1; font-size: 12px; font-weight: 700; gap: 8px; }
 .share-switcher button { border-radius: 3px; background: #35373c; color: #b5bac1; padding: 5px 8px; font-size: 12px; }
 .share-switcher button:hover { color: #f2f3f5; background: #404249; }
 .share-switcher button.active { color: #fff; background: #5865f2; }
-.call-toolbar { position: sticky; bottom: -12px; z-index: 8; padding: 12px 0 4px; margin-top: 4px; gap: 8px; background: var(--signal-call-bg, #1e1f22); }
+/* The controls belong after the media in this scroll region. A negative sticky
+   bottom made them drift toward the chat/composer on short windows. */
+.call-stage > .call-toolbar { position: relative; inset: auto; z-index: auto; flex: 0 0 auto; padding: 12px 0 4px; margin-top: 4px; gap: 8px; background: transparent; }
 .toolbar-main { gap: 8px; background: transparent; }
 .call-control { min-height: 42px; gap: 8px; padding: 11px 13px; border: 0; border-radius: 8px; background: #383a40; color: #f2f3f5; font-size: 12px; font-weight: 500; }
 .call-control:hover:not(:disabled) { background: #4e5058; }
@@ -603,7 +606,7 @@ label { color: #b5bac1; font-size: 12px; font-weight: 700; gap: 8px; }
   .empty-chat { padding: 10px 16px 20px; }
   .empty-chat strong { font-size: 13px; }
   .empty-chat span { font-size: 12px; }
-  .call-stage { padding: 12px; max-height: 72vh; max-height: 72dvh; min-height: 260px; }
+  .call-stage { padding: 12px; max-height: 72vh; max-height: 72dvh; min-height: 0; }
   .call-heading h2 { font-size: 16px; }
   .call-heading { flex-wrap: nowrap; }
   .call-count { font-size: 11px; }

@@ -260,6 +260,9 @@ export async function createApp(options = {}) {
     return { id: Number(row.id), channelId: row.channel_id, content: row.content, createdAt: new Date(Number(row.created_at)).toISOString(), user: { id: row.user_id, username: row.username, displayName: row.username, role: row.role }, ...messageExtras(db, row.id) };
   }
   const selectMessage = 'SELECT messages.*, users.username, users.role FROM messages JOIN users ON users.id = messages.user_id';
+  // SQLite's built-in NOCASE/LOWER only fold ASCII. Use the same Unicode
+  // normalization on stored text and query, including Russian account chats.
+  db.function('signal_search_fold', { deterministic: true }, value => typeof value === 'string' ? value.normalize('NFKC').toLowerCase() : '');
   communities = createCommunityService({ app, db, clock, HttpError, requireAuth, enforceRate, sockets, sendClient, getChannel, listChannels, broadcastChannels, broadcastPresence, broadcastInvitations, rotateMediaKey, resetMediaRoom });
 
   app.use((req, res, next) => {
@@ -315,6 +318,9 @@ export async function createApp(options = {}) {
     if (typeof username !== 'string' || username.length > 32 || typeof password !== 'string' || password.length > 128 || Buffer.byteLength(password) > 512) throw new HttpError(400, 'Укажите имя пользователя и пароль.');
     const row = db.prepare('SELECT * FROM users WHERE username = ?').get(username.toLowerCase());
     if (!await passwordMatches(password, row?.password_hash || dummyHash) || !row) throw new HttpError(401, 'Неверное имя пользователя или пароль.');
+    // An old-password verification can finish after another request changed it.
+    // No asynchronous work may intervene between this check and session issue.
+    if (db.prepare('SELECT password_hash FROM users WHERE id = ?').get(row.id)?.password_hash !== row.password_hash) throw new HttpError(401, 'Неверное имя пользователя или пароль.');
     createSession(res, row.id);
     syncMediaUsernames(row.id);
     res.json({ user: publicUser(row) });
@@ -338,6 +344,61 @@ export async function createApp(options = {}) {
     for (const [ws, client] of sockets) if (client.tokenHash === req.auth.tokenHash) ws.close(4001, 'Вы вышли из аккаунта');
     res.clearCookie(COOKIE_NAME, { httpOnly: true, sameSite: 'lax', secure: production, path: '/' });
     res.status(204).end();
+  });
+  app.post('/api/account/password', requireAuth, async (req, res) => {
+    enforceRate(`password-account:${req.auth.user.id}`, 5, 15 * 60_000);
+    enforceRate(`password-ip:${req.ip}`, 10, 15 * 60_000);
+    const { currentPassword, newPassword } = req.body || {};
+    if (typeof currentPassword !== 'string' || !currentPassword.length || currentPassword.length > 128 || Buffer.byteLength(currentPassword) > 512) throw new HttpError(400, 'Укажите текущий пароль.');
+    if (!validPassword(newPassword)) throw new HttpError(400, 'Новый пароль должен содержать от 12 до 128 символов.');
+    const userId = req.auth.user.id, currentToken = req.auth.tokenHash;
+    const account = db.prepare('SELECT password_hash FROM users WHERE id = ?').get(userId);
+    if (!account || !await passwordMatches(currentPassword, account.password_hash)) throw new HttpError(403, 'Текущий пароль указан неверно.');
+    const replacement = await hashPassword(newPassword);
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      const currentSession = sessionUser(req);
+      if (!currentSession || currentSession.user.id !== userId || currentSession.tokenHash !== currentToken) throw new HttpError(401, 'Сессия завершена. Войдите снова.');
+      const changed = db.prepare(`UPDATE users SET password_hash = ? WHERE id = ? AND password_hash = ?
+        AND EXISTS (SELECT 1 FROM sessions WHERE token_hash = ? AND user_id = ? AND expires_at > ?)`).run(replacement, userId, account.password_hash, currentToken, userId, clock());
+      if (changed.changes !== 1) {
+        if (!sessionUser(req)) throw new HttpError(401, 'Сессия завершена. Войдите снова.');
+        throw new HttpError(409, 'Пароль уже изменён в другом запросе. Повторите действие с действующим паролем.');
+      }
+      db.prepare('DELETE FROM sessions WHERE user_id = ? AND token_hash <> ?').run(userId, currentToken);
+      db.exec('COMMIT');
+    } catch (error) { db.exec('ROLLBACK'); throw error; }
+    for (const [ws, client] of sockets) if (client.user.id === userId && client.tokenHash !== currentToken) ws.close(4001, 'Пароль изменён. Войдите снова.');
+    broadcastPresence();
+    res.json({ ok: true, otherSessionsRevoked: true });
+  });
+  app.get('/api/search', requireAuth, (req, res) => {
+    enforceRate(`search:${req.auth.user.id}`, 60, 60_000);
+    const raw = req.query.q, channelId = req.query.channelId, before = req.query.before;
+    if (typeof raw !== 'string' || raw.trim().length < 2 || raw.trim().length > 100 || raw.includes('\0')) throw new HttpError(400, 'Введите для поиска от 2 до 100 символов.');
+    if (channelId !== undefined && (typeof channelId !== 'string' || !/^[A-Za-z0-9_-]{1,100}$/.test(channelId))) throw new HttpError(400, 'Некорректный канал поиска.');
+    if (before !== undefined && (typeof before !== 'string' || !/^[1-9]\d{0,14}$/.test(before))) throw new HttpError(400, 'Некорректный указатель поиска.');
+    const userId = req.auth.user.id;
+    if (channelId) getChannel(channelId, userId);
+    // instr is a literal substring search: %, _ and other pattern characters
+    // never broaden the query, and both operands use the same Unicode fold.
+    const needle = raw.trim().normalize('NFKC').toLowerCase();
+    const filters = ['memberships.user_id = ?', channelBanFilter,
+      "(channels.kind <> 'direct' OR EXISTS (SELECT 1 FROM direct_conversations WHERE channel_id = channels.id AND (first_user_id = memberships.user_id OR second_user_id = memberships.user_id)))",
+      'messages.deleted_at IS NULL', 'instr(signal_search_fold(messages.content), ?) > 0'];
+    const parameters = [userId, needle];
+    if (channelId) { filters.push('channels.id = ?'); parameters.push(channelId); }
+    if (before) { filters.push('messages.id < ?'); parameters.push(Number(before)); }
+    const rows = db.prepare(`SELECT messages.id, messages.channel_id, messages.content, messages.created_at, users.id AS author_id, users.username
+      FROM messages JOIN channels ON channels.id = messages.channel_id JOIN memberships ON memberships.channel_id = channels.id JOIN users ON users.id = messages.user_id
+      WHERE ${filters.join(' AND ')} ORDER BY messages.id DESC LIMIT 41`).all(...parameters);
+    const names = new Map();
+    const messages = rows.slice(0, 40).map(row => {
+      if (!names.has(row.channel_id)) names.set(row.channel_id, getChannel(row.channel_id, userId).name);
+      return { id: Number(row.id), channelId: row.channel_id, channelName: names.get(row.channel_id), content: row.content, createdAt: new Date(Number(row.created_at)).toISOString(), user: { id: row.author_id, username: row.username } };
+    });
+    const hasMore = rows.length > 40;
+    res.json({ messages, hasMore, nextBefore: hasMore && messages.length ? messages[messages.length - 1].id : null });
   });
   app.get('/api/channels', requireAuth, (req, res) => res.json({ channels: listChannels(req.auth.user.id) }));
   app.post('/api/channels', requireAuth, (req, res) => {
