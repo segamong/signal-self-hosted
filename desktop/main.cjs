@@ -79,16 +79,26 @@ function sendEvent(value) {
   if (mainWindow && !mainWindow.isDestroyed() && isAppUrl(mainWindow.webContents.getURL())) mainWindow.webContents.send('signal:event', value);
 }
 function showWindow() {
+  if (quitting) return;
   if (!mainWindow || mainWindow.isDestroyed()) createMainWindow();
   if (mainWindow.isMinimized()) mainWindow.restore();
-  mainWindow.show(); mainWindow.focus();
+  mainWindow.show(); mainWindow.focus(); mainWindow.flashFrame(false);
+}
+function callNotificationFailed(id, notification) {
+  const item = callNotifications.get(id);
+  if (!item || item.notification !== notification) return;
+  // When Windows reports a toast failure, keep the existing expiry so taskbar
+  // attention ends with this call. OS notification settings remain user-owned.
+  item.failed = true;
+  if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.isFocused()) mainWindow.flashFrame(true);
 }
 function dismissCallNotification(id) {
   const item = callNotifications.get(id);
   if (!item) return;
   callNotifications.delete(id);
   clearTimeout(item.timer);
-  item.notification.close();
+  try { item.notification.close(); } catch { /* A failed native toast may already be gone. */ }
+  if (mainWindow && !mainWindow.isDestroyed() && ![...callNotifications.values()].some((entry) => entry.failed)) mainWindow.flashFrame(false);
 }
 function dismissAllCallNotifications() {
   for (const id of [...callNotifications.keys()]) dismissCallNotification(id);
@@ -105,14 +115,21 @@ function notifyIncomingCall(value) {
   while (seenCallNotifications.size >= 200) seenCallNotifications.delete(seenCallNotifications.keys().next().value);
   seenCallNotifications.set(value.id, expiresAt + 60_000);
   try {
-    const notification = new Notification({ title: 'Входящий звонок в Сигнал', body: `@${value.username} звонит вам`, silent: true, timeoutType: 'never' });
+    const notification = new Notification({ title: 'Входящий звонок в Сигнал', body: `@${value.username} звонит вам`, icon: path.join(__dirname, 'assets', 'icon.png'), silent: true, timeoutType: 'never' });
     const timer = setTimeout(() => dismissCallNotification(value.id), Math.max(1, expiresAt - now));
-    timer.unref(); callNotifications.set(value.id, { notification, timer });
+    timer.unref(); callNotifications.set(value.id, { notification, timer, failed: false });
     notification.on('click', () => { showWindow(); dismissCallNotification(value.id); });
-    notification.on('close', () => { const current = callNotifications.get(value.id); if (current?.notification === notification) { clearTimeout(current.timer); callNotifications.delete(value.id); } });
-    notification.on('failed', () => dismissCallNotification(value.id));
+    notification.on('close', () => {
+      const current = callNotifications.get(value.id);
+      if (current?.notification === notification && !current.failed) { clearTimeout(current.timer); callNotifications.delete(value.id); }
+    });
+    notification.on('failed', () => callNotificationFailed(value.id, notification));
     notification.show(); return true;
-  } catch { dismissCallNotification(value.id); return false; }
+  } catch {
+    const current = callNotifications.get(value.id);
+    if (current) callNotificationFailed(value.id, current.notification);
+    return false;
+  }
 }
 function receiveInvite(value) {
   const code = inviteCode(value);
@@ -144,6 +161,7 @@ function stopSocket() {
   connectingSocket = null;
   eventSnapshots.clear();
   dismissAllCallNotifications();
+  seenCallNotifications.clear();
   clearTimeout(retryTimer); retryTimer = null; retryAttempt = 0;
   const old = socket; socket = null;
   if (old) { old.removeAllListeners(); old.on('error', () => {}); old.close(); }
@@ -404,7 +422,9 @@ function createMainWindow() {
   mainWindow = new BrowserWindow({
     ...bounds, minWidth: 980, minHeight: 680, title: 'Сигнал', frame: false,
     show: false, backgroundColor: '#101119', autoHideMenuBar: true, icon: path.join(__dirname, 'assets', 'icon.png'),
-    webPreferences: { session: clientSession, preload: path.join(__dirname, 'preload.cjs'), sandbox: true, contextIsolation: true, nodeIntegration: false, webSecurity: true, spellcheck: false, backgroundThrottling: false },
+    // Only our hardened app://signal window can play the pending-call ringtone
+    // without a recent gesture. Browser pages keep their own autoplay policy.
+    webPreferences: { session: clientSession, preload: path.join(__dirname, 'preload.cjs'), sandbox: true, contextIsolation: true, nodeIntegration: false, webSecurity: true, spellcheck: false, backgroundThrottling: false, autoplayPolicy: 'no-user-gesture-required' },
   });
   hardenWindow(mainWindow);
   mainWindow.webContents.on('did-start-loading', () => { rendererReady = false; });
@@ -414,6 +434,7 @@ function createMainWindow() {
     else if (!quitting) { event.preventDefault(); app.quit(); }
   });
   mainWindow.on('closed', () => { rendererReady = false; mainWindow = null; });
+  mainWindow.on('focus', () => mainWindow?.flashFrame(false));
   mainWindow.webContents.on('render-process-gone', () => { rendererReady = false; authenticated = false; stopSocket(); finishCapture(null); });
   mainWindow.once('ready-to-show', () => {
     if (maximized) mainWindow.maximize();

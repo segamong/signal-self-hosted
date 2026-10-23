@@ -17,7 +17,7 @@ import { channelCapacity, type Channel } from './channelTypes';
 import {FriendsHome,EMPTY_FRIENDS,type Friend,type FriendsState,type DirectCall} from './FriendsHome';
 import {ThemeMenu} from './ThemeMenu';
 import {PersonalAudioControls} from './PersonalAudioControls';
-import {syncIncomingCallNotifications,clearCallNotifications,CallNotificationSettings} from './callNotifications';
+import {syncCallNotifications,clearCallNotifications} from './callNotifications';
 import {HeaderSearch,type SearchMessage} from './HeaderSearch';
 import {PasswordChangeForm} from './PasswordChangeForm';
 const CallStage = lazy(() => import('./CallStage'));
@@ -173,7 +173,7 @@ function App() {
     const canManageWorkspace=workspace?.role==='owner'||workspace?.role==='admin';
     const ringingCalls=directCalls.filter(item=>item.status==='pending');
     const ringingCall=ringingCalls.find(item=>item.recipient.id===user?.id)||ringingCalls[0];
-    useEffect(()=>{syncIncomingCallNotifications(webDesktop?directCalls:[],webDesktop?user?.id||null:null);},[directCalls,user?.id,webDesktop]);
+    useEffect(()=>{syncCallNotifications(webDesktop?directCalls:[],webDesktop?user?.id||null:null);},[directCalls,user?.id,webDesktop]);
     useEffect(()=>()=>clearCallNotifications(),[]);
     useEffect(()=>{if(call?.kind==='direct'){const accepted=directCalls.find(item=>item.status==='accepted'&&item.channelId===call.id);if(accepted)connectedRing.current=accepted.id;}},[directCalls,call]);
     const count = (id: string) => rooms.find(r => r.id === id)?.participants.length || 0;
@@ -193,6 +193,11 @@ function App() {
             androidCommand({type:'openCall',channelId:next.id,channelName:next.name});
             return;
         }
+        if (ringMutation.current && !connectedRing.current) {
+            setError('Дождитесь завершения действия со звонком.');
+            return;
+        }
+        void cancelOtherOutgoingCalls(connectedRing.current || undefined);
         callIdRef.current = next.id;
         callPreferences.current = { ...DEFAULT_CALL_PREFERENCES };
         setInitialCallPreferences(callPreferences.current);
@@ -246,6 +251,19 @@ function App() {
         if(previous&&((previous.status!=='pending'&&next.status==='pending')||(!['pending','accepted'].includes(previous.status)&&next.status==='accepted')))return previous;
         knownCalls.current.set(next.id,next);return next;
     }
+    async function cancelOtherOutgoingCalls(exceptId?:string){
+        const accountId=authUserId.current;
+        if(!accountId)return;
+        const others=directCalls.filter(item=>item.id!==exceptId&&item.status==='pending'&&item.caller.id===accountId&&authorizedRings.current.has(item.id));
+        for(const item of others)authorizedRings.current.delete(item.id);
+        await Promise.allSettled(others.map(async item=>{
+            if(authUserId.current!==accountId)return;
+            // A recipient can answer between our snapshot and this request.
+            // End also handles that transition, so the abandoned call closes.
+            const result=await api<{call:DirectCall;channel?:Channel}>(`/direct-calls/${encodeURIComponent(item.id)}/respond`,{action:'end'});
+            if(authUserId.current===accountId)receiveDirectCall(result.call,result.channel);
+        }));
+    }
     function receiveDirectCall(incoming:DirectCall,nextChannel?:Channel){
         const next=rememberCall(incoming);
         setDirectCalls(old=>[...old.filter(item=>item.id!==next.id),next].filter(item=>['pending','accepted'].includes(item.status)));
@@ -264,6 +282,7 @@ function App() {
     async function callFriend(friend:Pick<Friend,'id'|'username'>){
         if(!user||ringMutation.current)return;
         if(callIdRef.current){setError('Сначала завершите текущий звонок.');return;}
+        if(directCalls.some(item=>item.status==='pending'&&item.caller.id===user.id&&Date.parse(item.expiresAt)>Date.now())){setError('Сначала завершите ожидающий вызов.');return;}
         const accountId=user.id;ringMutation.current=true;setRingBusy(true);pendingCallPeers.current.add(friend.id);
         try{const result=await api<{call:DirectCall;channel:Channel}>('/direct-calls',{userId:friend.id});if(authUserId.current!==accountId)return;authorizedRings.current.add(result.call.id);mutateChannels(old=>[...new Map([...old,result.channel].map(item=>[item.id,item])).values()]);receiveDirectCall(result.call,result.channel);}
         catch(cause){if(authUserId.current===accountId)setError((cause as Error).message);}
@@ -273,7 +292,7 @@ function App() {
         if(!user||ringMutation.current)return;
         if(action==='accept'&&callIdRef.current&&callIdRef.current!==next.channelId){setError('Сначала завершите текущий звонок.');return;}
         const accountId=user.id;ringMutation.current=true;setRingBusy(true);if(action==='accept')authorizedRings.current.add(next.id);
-        try{const result=await api<{call:DirectCall;channel?:Channel}>(`/direct-calls/${encodeURIComponent(next.id)}/respond`,{action});if(authUserId.current===accountId)receiveDirectCall(result.call,result.channel);}
+        try{if(action==='accept')void cancelOtherOutgoingCalls(next.id);const result=await api<{call:DirectCall;channel?:Channel}>(`/direct-calls/${encodeURIComponent(next.id)}/respond`,{action});if(authUserId.current===accountId)receiveDirectCall(result.call,result.channel);}
         catch(cause){authorizedRings.current.delete(next.id);if(authUserId.current===accountId)setError((cause as Error).message);}
         finally{ringMutation.current=false;if(authUserId.current===accountId)setRingBusy(false);}
     }
@@ -1047,7 +1066,7 @@ function App() {
         {modal === 'workspace'&&webDesktop&&<><h2>Создать сервер</h2><p>Соберите друзей в одном месте. Внутри можно создать несколько текстовых и голосовых каналов.</p><form onSubmit={createWorkspace}><label>Название сервера<input name="name" required maxLength={40} placeholder="Например, Свой круг"/></label><label>Описание<input name="description" maxLength={180} placeholder="Место для ваших разговоров"/></label><button className="primary full" disabled={modalBusy}>{modalBusy?'Создаём…':'Создать сервер'}<Plus size={17}/></button></form></>}
         {modal === 'channel' && <><h2>{webDesktop?'Создать канал':'Ещё одно место для общения'}</h2><form onSubmit={createChannel}><p>{webDesktop?`Новый канал на сервере «${workspace?.name||'Свой круг'}». Доступ получат его участники.`:'Вы станете владельцем канала и сможете приглашать участников. Внутри — чат, голос, видео и показ экрана.'}</p>{webDesktop&&<fieldset className="channel-type-picker"><legend>Тип канала</legend><label className={newChannelType==='text'?'active':''}><input type="radio" name="channelType" value="text" checked={newChannelType==='text'} onChange={()=>setNewChannelType('text')}/><Hash size={23}/><span><strong>Текстовый</strong><small>Сообщения и обсуждения</small></span></label><label className={newChannelType==='voice'?'active':''}><input type="radio" name="channelType" value="voice" checked={newChannelType==='voice'} onChange={()=>setNewChannelType('voice')}/><Volume2 size={23}/><span><strong>Голосовой</strong><small>Голос, видео и экран · до 10 участников</small></span></label></fieldset>}<label>Название<input name="name" required maxLength={40} placeholder={newChannelType==='voice'?'Например, Гостиная':'Например, общий'}/></label><label>Описание<input name="description" maxLength={180} placeholder="О чём будем говорить?"/></label><button className="primary full" disabled={modalBusy}>{modalBusy ? 'Создаём…' : 'Создать канал'}<Plus size={17}/></button></form></>}
         {modal === 'join' && <><h2>Вступить в канал</h2><p>Приглашение добавит сервер и его текстовые и голосовые каналы в ваш аккаунт.</p><form onSubmit={previewInvite}><label>Ссылка или код приглашения<input value={joinValue} onChange={event => { setJoinValue(event.target.value); setInviteInfo(null); setJoinError(''); }} placeholder="signal://invite/…" autoComplete="off" maxLength={256} required/></label><button className="secondary full" disabled={modalBusy || !joinValue.trim()}>{modalBusy ? 'Подождите…' : 'Посмотреть канал'}<ArrowRight size={17}/></button></form>{inviteInfo && <div className="invite-preview"><Hash size={24}/><div><strong>{inviteInfo.channel.name}</strong><span>{channels.some(item => item.id === inviteInfo.channel.id) ? 'Вы уже участник' : inviteInfo.valid ? 'Приглашение действительно' : 'Срок или число вступлений исчерпаны'}</span></div></div>}{inviteInfo && (inviteInfo.valid || channels.some(item => item.id === inviteInfo.channel.id)) && <button className="primary full" disabled={modalBusy} onClick={joinChannel}>{channels.some(item => item.id === inviteInfo.channel.id) ? 'Открыть канал' : 'Принять приглашение'}<Check size={17}/></button>}{joinError && <p className="form-error" role="alert">{joinError}</p>}</>}
-        {modal === 'settings' && <><h2>Ваш Сигнал</h2><p>Вы вошли как <strong>@{user.username}</strong>. Каналы и переписка хранятся на вашем сервере.</p>{window.signalDesktop && <div className="desktop-settings"><label><input type="checkbox" checked={desktopSettings.openAtLogin} onChange={event => void saveDesktopSetting('openAtLogin', event.target.checked)}/><span>Запускать вместе с Windows</span></label><label><input type="checkbox" checked={desktopSettings.closeToTray} onChange={event => void saveDesktopSetting('closeToTray', event.target.checked)}/><span>При закрытии оставаться в трее</span></label><p>Для полного выхода используйте меню Сигнала в трее.</p></div>}{webDesktop&&<PasswordChangeForm key={user.id} username={user.username}/>}{webDesktop&&<CallNotificationSettings/>}<DesktopUpdates/>{window.signalAndroidBridge && <button className="secondary full" onClick={() => androidCommand({type:'checkUpdate'})}><Download size={17}/>Проверить обновления Android</button>}<div className="server-address"><ShieldCheck size={17}/><span>Сервер: {SERVER_ORIGIN}</span></div><p className="modal-footnote">Камера, микрофон, устройства и качество трансляции настраиваются в голосовой комнате.</p></>}
+        {modal === 'settings' && <><h2>Ваш Сигнал</h2><p>Вы вошли как <strong>@{user.username}</strong>. Каналы и переписка хранятся на вашем сервере.</p>{window.signalDesktop && <div className="desktop-settings"><label><input type="checkbox" checked={desktopSettings.openAtLogin} onChange={event => void saveDesktopSetting('openAtLogin', event.target.checked)}/><span>Запускать вместе с Windows</span></label><label><input type="checkbox" checked={desktopSettings.closeToTray} onChange={event => void saveDesktopSetting('closeToTray', event.target.checked)}/><span>При закрытии оставаться в трее</span></label><p>Для полного выхода используйте меню Сигнала в трее.</p></div>}{webDesktop&&<PasswordChangeForm key={user.id} username={user.username}/>}{webDesktop&&<button className="secondary full" onClick={()=>{setModal(null);window.dispatchEvent(new CustomEvent("signal-open-appearance",{detail:"sounds"}));}}>Звуки и уведомления</button>}<DesktopUpdates/>{window.signalAndroidBridge && <button className="secondary full" onClick={() => androidCommand({type:'checkUpdate'})}><Download size={17}/>Проверить обновления Android</button>}<div className="server-address"><ShieldCheck size={17}/><span>Сервер: {SERVER_ORIGIN}</span></div><p className="modal-footnote">Камера, микрофон, устройства и качество трансляции настраиваются в голосовой комнате.</p></>}
       </section></div>}
     </div>;
 }

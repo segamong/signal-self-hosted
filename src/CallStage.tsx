@@ -227,7 +227,7 @@ function ParticipantTile({ participant, username, local, volume, onVolume, onErr
       onError('Полноэкранное видео недоступно в этом приложении.');
     }
   };
-  return <article ref={tileRef} className={`participant-tile${participant.isSpeaking ? ' speaking' : ''}${compact ? ' compact' : ''}${track ? ' has-video' : ''}`}
+  return <article ref={tileRef} className={`participant-tile${participant.isSpeaking ? ' speaking' : ''}${compact ? ' compact' : ''}${track ? ' has-video' : ''}`} role="listitem" aria-label={`${name}${local ? ', вы' : ''}`}
     onDoubleClick={event => { if (event.target instanceof HTMLVideoElement) toggleFullscreen(); }}>
     {track ? <MediaVideo track={track} local={local} screen={false} /> : <div className="participant-avatar" style={{ background: colorFor(participant.identity) }}>{initials(name)}</div>}
     {track && <button className="participant-fullscreen-toggle" type="button" onClick={toggleFullscreen}
@@ -236,8 +236,8 @@ function ParticipantTile({ participant, username, local, volume, onVolume, onErr
       {fullscreen ? <Minimize2 size={18} /> : <Maximize2 size={18} />}
     </button>}
     {fullscreen && <span className="camera-fullscreen-hint">Esc — свернуть видео</span>}
-    <div className="participant-caption"><span>{name}{local && <small> · вы</small>}</span>
-      <span className="participant-caption-icons">{participant.isMicrophoneEnabled ? <Mic size={14} /> : <MicOff size={14} />}</span>
+    <div className="participant-caption"><span className="participant-name" title={name}><strong>{name}</strong>{local && <small>вы</small>}</span>
+      <span className="participant-caption-icons" aria-label={participant.isMicrophoneEnabled ? 'Микрофон включён' : 'Микрофон выключен'}>{participant.isMicrophoneEnabled ? <Mic size={14} /> : <MicOff size={14} />}</span>
     </div>
     {!local && <details className="participant-volume">
       <summary aria-label={`Громкость: ${name}`} title="Громкость участника">{volume === 0 ? <VolumeX size={16} /> : <Volume2 size={16} />}</summary>
@@ -860,9 +860,9 @@ export default function CallStage({ channel, user, onLeave, onError, initialPref
         <div className="share-video-wrap">{shareTrack ? <MediaVideo track={shareTrack} local={shareParticipant.isLocal} screen /> : <div className="share-loading"><LoaderCircle className="spin" size={24} /><span>Подключаем выбранную демонстрацию…</span></div>}</div>
         {shares.length > 1 && <div className="share-switcher">{shares.map(participant => <button key={participant.identity} className={participant === shareParticipant ? 'active' : ''} aria-pressed={participant === shareParticipant} onClick={() => focusShare(participant.identity)}>{usernameFor(participant)}</button>)}</div>}
       </ScreenShareFrame>}
-      <div className={`participant-grid${shareParticipant ? ' thumbnails' : ''}`}>{participants.map(participant => <ParticipantTile key={participant.identity} participant={participant} username={usernameFor(participant)} local={participant.isLocal} compact={!!shareParticipant} volume={volumes[participant.identity] ?? 100} onVolume={value => setVolumes(previous => ({ ...previous, [participant.identity]: value }))} onError={message => callbacks.current.onError(message)} />)}</div>
+      <div className={`participant-grid${shareParticipant ? ' thumbnails' : ''}`} data-participants={participants.length} role="list" aria-label="Участники звонка">{participants.map(participant => <ParticipantTile key={participant.identity} participant={participant} username={usernameFor(participant)} local={participant.isLocal} compact={!!shareParticipant} volume={volumes[participant.identity] ?? 100} onVolume={value => setVolumes(previous => ({ ...previous, [participant.identity]: value }))} onError={message => callbacks.current.onError(message)} />)}</div>
       </div>
-      {participants.length === 1 && !shareParticipant && <div className="call-alone"><span>Здесь пока тихо</span><p>{channel.kind === 'direct' ? 'Вы в личном разговоре. Дождитесь собеседника.' : 'Вы уже в канале. Пригласите друзей и начните разговор.'}</p></div>}
+      {participants.length === 1 && !shareParticipant && <div className="call-alone"><p>{channel.kind === 'direct' ? 'Ожидаем собеседника в личном разговоре.' : 'Вы пока одни в голосовом канале. Пригласите друзей.'}</p></div>}
     </>}
 
     {settingsOpen && <CallSettingsDrawer onClose={() => setSettingsOpen(false)}><div className="call-settings"><div className="settings-heading"><h3>Устройства</h3><button className="text-button" onClick={() => void listDevices()}><RefreshCw size={14} />Обновить устройства</button></div>

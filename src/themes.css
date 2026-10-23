@@ -222,11 +222,19 @@
 .theme-menu { position: relative; display: flex; flex: 0 0 auto; }
 .user-panel>.theme-menu,.user-panel>.personal-audio-controls { flex: 0 0 auto; min-width: 0; }
 .theme-menu-toggle { display: inline-flex; justify-content: center; align-items: center; cursor: pointer; }
-.theme-menu-popup { position: fixed; z-index: 180; width: 300px; max-width: calc(100vw - 16px); max-height: min(440px,calc(100dvh - 80px)); overflow-y: auto; overscroll-behavior: contain; background: var(--signal-panel,#2b2d31); color: var(--signal-text,#dbdee1); border: 1px solid var(--signal-border,#45474e); border-radius: 10px; box-shadow: 0 12px 42px #0006; padding: 16px; animation: theme-menu-enter 140ms ease-out; }
-.theme-menu-popup>header { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 16px; }
+.theme-menu-popup { position: fixed; z-index: 180; display: flex; flex-direction: column; width: 420px; max-width: calc(100vw - 16px); max-height: min(640px,calc(100dvh - 80px)); overflow: hidden; background: var(--signal-panel,#2b2d31); color: var(--signal-text,#dbdee1); border: 1px solid var(--signal-border,#45474e); border-radius: 12px; box-shadow: var(--signal-shadow,0 12px 42px #0006); padding: 0; animation: theme-menu-enter 140ms ease-out; }
+.theme-menu-popup>header { display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; gap: 8px; padding: 16px 16px 12px; }
 .theme-menu-popup>header h2 { display: flex; align-items: center; gap: 9px; margin: 0; color: var(--signal-heading,#f2f3f5); font-size: 15px; font-weight: 600; }
 .theme-menu-popup>header .icon-btn { display: grid; place-items: center; height: 26px; width: 26px; color: var(--signal-interactive,#b5bac1); background: transparent; }
 .theme-menu-popup>header .icon-btn:hover { background: var(--signal-hover,#35373c); }
+.appearance-tabs { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); flex-shrink: 0; gap: 4px; margin: 0 16px 12px; padding: 4px; border-radius: 8px; background: var(--signal-deep,#1e1f22); }
+.appearance-tabs button { display: flex; justify-content: center; align-items: center; gap: 7px; min-width: 0; min-height: 36px; padding: 7px 10px; border: 0; border-radius: 5px; background: transparent; color: var(--signal-muted,#a1a6af); cursor: pointer; font-size: 13px; font-weight: 600; }
+.appearance-tabs button:hover { background: var(--signal-hover,#35373c); color: var(--signal-heading,#f2f3f5); }
+.appearance-tabs button[aria-selected="true"] { background: var(--signal-selected,#404249); color: var(--signal-heading,#f2f3f5); }
+.appearance-tabs button:focus-visible { outline: 2px solid var(--signal-focus,#00a8fc); outline-offset: 1px; }
+.appearance-pane { min-height: 0; overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; padding: 2px 16px 16px; }
+.appearance-pane[hidden] { display: none; }
+.appearance-pane:focus-visible { outline: 2px solid var(--signal-focus,#00a8fc); outline-offset: -3px; }
 .theme-menu-popup fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }
 .theme-menu-popup legend { font-size: 11px; font-weight: 600; color: var(--signal-muted,#a1a6af); margin-bottom: 10px; padding: 0; }
 .theme-choice-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 8px; }
@@ -240,7 +248,7 @@
 .theme-choice-preview>b { position: absolute; left: 38%; top: 12px; right: 14px; height: 7px; border-radius: 3px; }
 .theme-choice-preview>em { position: absolute; top: 27px; left: 38%; right: 18px; height: 4px; background: currentColor; border-radius: 2px; opacity: .45; box-shadow: 0 9px 0 currentColor; }
 .theme-choice-preview>svg { position: absolute; top: 3px; right: 3px; padding: 2px; width: 20px; height: 20px; border-radius: 50%; background: #15171b; color: #fff; }
-.theme-menu-popup>p { margin: 14px 0 0; color: var(--signal-muted,#a1a6af); font-size: 11px; line-height: 1.5; }
+.theme-menu-popup .theme-selection-status { margin: 14px 0 0; color: var(--signal-muted,#a1a6af); font-size: 11px; line-height: 1.5; }
 .theme-menu-popup .theme-selection-status strong { color: var(--signal-heading,#f2f3f5); font-weight: 600; }
 .personal-audio-controls { display: flex; align-items: center; gap: 0; }
 .personal-audio-button { display: grid; place-items: center; width: 28px; height: 32px; border: 0; padding: 0; border-radius: 4px; background: transparent; color: var(--signal-muted,#949ba4); cursor: pointer; transition: color 120ms,background-color 120ms; }
