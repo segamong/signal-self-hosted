@@ -253,7 +253,7 @@ label { color: #b5bac1; font-size: 12px; font-weight: 700; gap: 8px; }
 .call-encryption .encryption-popover p { color: #b5bac1; font-size: 12px; line-height: 1.6; }
 .call-encryption .encryption-popover small { color: #949ba4; font-size: 11px; }
 .call-media-layout { min-width: 0; }
-.call-media-layout.has-screen-share { display: grid; grid-template-columns: minmax(0, 1fr) 196px; gap: 12px; align-items: stretch; }
+.call-media-layout.has-screen-share { --share-video-height: min(40vh, 420px); --share-video-height: min(40dvh, 420px); display: grid; grid-template-columns: minmax(0, 1fr) 176px; gap: 12px; align-items: start; width: 100%; max-width: calc(var(--share-video-height) * 16 / 9 + 188px); margin-inline: auto; }
 .participant-grid { grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 8px; }
 .participant-tile { height: auto; min-height: 130px; aspect-ratio: 16 / 9; border: 2px solid transparent; border-radius: 8px; background: #2b2d31; }
 /* Center complete rows and the final partial row. Card width follows the room
@@ -290,14 +290,18 @@ label { color: #b5bac1; font-size: 12px; font-weight: 700; gap: 8px; }
 .video-quality { color: #b5bac1; background: #111214bf; border-radius: 4px; font-size: 10px; }
 .participant-tile.compact { height: 110px; min-height: 110px; aspect-ratio: auto; }
 .participant-tile.compact .participant-avatar { width: 42px; height: 42px; border-radius: 50%; font-size: 17px; }
-.call-media-layout.has-screen-share > .participant-grid.thumbnails { grid-template-columns: minmax(0, 1fr); grid-auto-rows: 110px; gap: 8px; align-content: start; max-height: min(49vh, 540px); max-height: min(49dvh, 540px); overflow-y: auto; padding-right: 2px; scrollbar-width: thin; scrollbar-color: #111214 transparent; }
+.call-media-layout.has-screen-share > .participant-grid.thumbnails { grid-template-columns: minmax(0, 1fr); grid-auto-rows: 99px; gap: 8px; align-content: start; min-height: 0; max-height: calc(var(--share-video-height) + 36px); overflow-y: auto; padding-right: 2px; scrollbar-width: thin; scrollbar-color: #111214 transparent; }
+.call-media-layout.has-screen-share .participant-tile.compact:not(:fullscreen) { height: 99px; min-height: 99px; }
 .call-media-layout.has-screen-share > .share-stage { min-width: 0; margin: 0; padding: 0; display: flex; flex-direction: column; }
 .share-stage:not(:fullscreen) .share-title { min-height: 28px; margin: 0 0 8px; font-size: 13px; color: #f2f3f5; gap: 8px; }
 .share-title > span { min-width: 0; gap: 7px; }
 .share-title small { color: #949ba4; font-size: 11px; }
 .share-title .icon-button { width: 28px; height: 28px; padding: 5px; border-radius: 4px; background: #35373c; color: #b5bac1; }
 .share-title .icon-button:hover { color: #fff; background: #4e5058; }
-.share-stage:not(:fullscreen) .share-video-wrap { flex: 1; height: min(44vh, 490px); height: min(44dvh, 490px); min-height: 220px; border: 0; border-radius: 6px; background: #111214; }
+/* A definite 16:9 box prevents the video's intrinsic dimensions and the
+   participant column from stretching the stream across an ultrawide window. */
+.share-stage:not(:fullscreen) .share-video-wrap { flex: 0 0 auto; width: 100%; height: auto; min-height: 0; max-height: var(--share-video-height, 420px); aspect-ratio: 16 / 9; border: 0; border-radius: 6px; background: #111214; }
+.share-stage:not(:fullscreen) .share-video-wrap .screen-video { position: absolute; inset: 0; display: block; width: 100%; height: 100%; object-fit: contain; }
 .screen-video { background: #111214; }
 .share-loading { color: #949ba4; }
 .share-switcher { flex-wrap: wrap; margin: 8px 0 0; gap: 6px; }
@@ -559,9 +563,9 @@ label { color: #b5bac1; font-size: 12px; font-weight: 700; gap: 8px; }
 }
 
 @container call (max-width: 590px) {
-  .call-media-layout.has-screen-share { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+  .call-media-layout.has-screen-share { grid-template-columns: minmax(0, 1fr); gap: 8px; max-width: calc(var(--share-video-height) * 16 / 9); }
   .call-media-layout.has-screen-share > .participant-grid.thumbnails { display: flex; flex-wrap: nowrap; overflow-x: auto; overflow-y: hidden; max-height: none; padding: 0 0 4px; }
-  .call-media-layout.has-screen-share .participant-tile.compact { flex: 0 0 160px; min-width: 0; height: 90px; min-height: 90px; }
+  .call-media-layout.has-screen-share .participant-tile.compact:not(:fullscreen) { flex: 0 0 160px; min-width: 0; height: 90px; min-height: 90px; }
   .call-control { padding: 10px; }
   .call-control > span { display: none; }
   .call-control > span:has(svg) { display: inline-flex; }
@@ -581,9 +585,9 @@ label { color: #b5bac1; font-size: 12px; font-weight: 700; gap: 8px; }
 @media (max-width: 1000px) {
   .channel-description, .header-divider { display: none; }
   .channel-sidebar { width: 224px; }
-  .call-media-layout.has-screen-share { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+  .call-media-layout.has-screen-share { grid-template-columns: minmax(0, 1fr); gap: 8px; max-width: calc(var(--share-video-height) * 16 / 9); }
   .call-media-layout.has-screen-share > .participant-grid.thumbnails { display: flex; flex-wrap: nowrap; overflow-x: auto; overflow-y: hidden; max-height: none; padding: 0 0 4px; }
-  .call-media-layout.has-screen-share .participant-tile.compact { flex: 0 0 160px; min-width: 0; height: 90px; min-height: 90px; }
+  .call-media-layout.has-screen-share .participant-tile.compact:not(:fullscreen) { flex: 0 0 160px; min-width: 0; height: 90px; min-height: 90px; }
   .device-grid { grid-template-columns: minmax(0, 1fr); }
 }
 
@@ -638,7 +642,7 @@ label { color: #b5bac1; font-size: 12px; font-weight: 700; gap: 8px; }
   .participant-tile { min-height: 115px; }
   .participant-avatar { width: 48px; height: 48px; font-size: 20px; }
   .participant-caption { font-size: 11px; }
-  .share-stage:not(:fullscreen) .share-video-wrap { min-height: 170px; height: 30vh; height: 30dvh; }
+  .call-media-layout.has-screen-share { --share-video-height: min(30vh, 300px); --share-video-height: min(30dvh, 300px); }
   .share-title small { display: none; }
   .call-toolbar { margin-top: 12px; }
   .call-control { min-height: 40px; padding: 10px; }
@@ -677,8 +681,7 @@ label { color: #b5bac1; font-size: 12px; font-weight: 700; gap: 8px; }
   .auth-card p.auth-hint { margin-top: 14px; }
   .call-stage { max-height: 78vh; max-height: 78dvh; padding-top: 12px; }
   .call-heading { margin-bottom: 10px; }
-  .share-stage:not(:fullscreen) .share-video-wrap { height: 35vh; height: 35dvh; min-height: 180px; }
-  .call-media-layout.has-screen-share > .participant-grid.thumbnails { max-height: 40vh; max-height: 40dvh; }
+  .call-media-layout.has-screen-share { --share-video-height: min(32vh, 240px); --share-video-height: min(32dvh, 240px); }
   .call-toolbar { margin-top: 12px; }
 }
 

@@ -8,7 +8,7 @@ const { createRequire } = require('node:module');
 const project = path.resolve(__dirname, '..');
 const packages = new Map();
 const unresolved = [];
-const roots = ['react', 'react-dom', 'lucide-react', 'livekit-client', 'ws'];
+const roots = ['react', 'react-dom', 'lucide-react', 'livekit-client', 'ws', '@sapphi-red/web-noise-suppressor'];
 
 function resolveRoot(name, from) {
   const resolver = createRequire(path.join(from, 'package.json'));
@@ -72,5 +72,8 @@ for (const [identity, { metadata, notices }] of [...packages].sort(([a], [b]) =>
   for (const notice of notices) output += `\n--- ${notice.name} ---\n${notice.content}${notice.content.endsWith('\n') ? '' : '\n'}`;
   output += '\n';
 }
+// The neural model, FFT and vendored worklet have their own upstream notices.
+// This same file is served with the web build under /licenses/.
+output += `${'='.repeat(76)}\n${fs.readFileSync(path.join(project, 'public', 'licenses', 'neural-noise.txt'), 'utf8')}\n`;
 fs.writeFileSync(path.join(__dirname, 'THIRD-PARTY-LICENSES.txt'), output, 'utf8');
 process.stdout.write(`Copied upstream notices for ${packages.size} packages.\n`);

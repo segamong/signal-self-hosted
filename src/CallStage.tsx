@@ -1,18 +1,21 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from './api';
 import { Room, RoomEvent, ConnectionState, DisconnectReason, Track, LocalVideoTrack, LocalAudioTrack, RemoteAudioTrack, VideoPresets, VideoQuality, BackupCodecPolicy, type LocalTrackPublication, type Participant, type RemoteParticipant, type TrackPublishOptions } from 'livekit-client';
-import { Headphones, HeadphoneOff, Mic, MicOff, Video, VideoOff, MonitorUp, MonitorOff, PhoneOff, Settings2, Volume2, VolumeX, Radio, ChevronDown, Maximize2, Minimize2, LoaderCircle, RefreshCw, LockKeyhole } from 'lucide-react';
+import { Headphones, HeadphoneOff, Mic, MicOff, Video, VideoOff, MonitorUp, MonitorOff, PhoneOff, Settings2, Volume2, Radio, ChevronDown, Maximize2, Minimize2, LoaderCircle, RefreshCw, LockKeyhole } from 'lucide-react';
 import './camera-fullscreen.css';
 import ScreenShareFrame from './ScreenShareFrame';
 import { toggleElementFullscreen } from './fullscreen';
-import { filterScreenAudio, screenAudioCaptureOptions } from './screenAudio';
+import { prepareScreenAudio, screenAudioCaptureOptions, supportsScreenAudioExclusion } from './screenAudio';
 import { availableScreenCodecs, chooseScreenCodec, type ScreenCodecChoice } from './screenCodecs';
-import { loadAudioPreferences, saveAudioPreferences, microphoneCapture, VOICE_ENCODING, type AudioPreferences } from './audioPreferences';
-import { applyMicrophoneProcessing, processMicrophoneTrack } from './microphoneProcessor';
+import { loadAudioPreferences, saveAudioPreferences, microphoneCapture, pushToTalkKeyLabel, VOICE_ENCODING, type AudioPreferences } from './audioPreferences';
+import { applyMicrophoneProcessing, processMicrophoneTrack, onMicrophoneProcessingError } from './microphoneProcessor';
 import { createCallEncryption, prepareCallKey, waitForCallEncryption } from './callEncryption';
 import './media-settings.css';
 import { channelCapacity, type Channel } from './channelTypes';
 import { CallSettingsDrawer } from './CallSettingsDrawer';
+import VoiceSettings from './VoiceSettings';
+import { usePushToTalk } from './usePushToTalk';
+import { RemoteCallAudio, ParticipantVolumeControl, useParticipantVolumes } from './participantAudio';
 
 export interface CallStageProps {
   channel: Channel;
@@ -89,6 +92,7 @@ async function enableMicrophone(current: Room, preferences: AudioPreferences) {
       return;
     } catch (error) { tracks.forEach(track => track.stop()); throw error; }
   }
+  await applyMicrophoneProcessing(current, preferences);
   await current.localParticipant.setMicrophoneEnabled(true, microphoneCapture(preferences), VOICE_ENCODING);
   try { await applyMicrophoneProcessing(current, preferences); }
   catch (error) {
@@ -154,39 +158,6 @@ function MediaVideo({ track, local, screen }: { track: Track; local: boolean; sc
   </>;
 }
 
-function RemoteAudio({ track, deafened, volume, onBlocked }: { track: RemoteAudioTrack; deafened: boolean; volume: number; onBlocked: () => void }) {
-  const elementRef = useRef<HTMLAudioElement>(null);
-  const preferences = useRef({ deafened, volume });
-  preferences.current = { deafened, volume };
-  useEffect(() => {
-    const element = elementRef.current;
-    if (!element) return;
-    let disposed = false;
-    const applyPreferences = () => {
-      const desired = preferences.current;
-      const level = desired.deafened ? 0 : Math.min(1, Math.max(0, desired.volume / 100));
-      if (element.muted !== desired.deafened) element.muted = desired.deafened;
-      if (element.volume !== level) element.volume = level;
-    };
-    track.attach(element);
-    applyPreferences();
-    // LiveKit startAudio unmutes attached elements when a local capture begins.
-    // Preserve the user's deafen preference across that browser unlock step.
-    element.addEventListener('volumechange', applyPreferences);
-    void element.play().catch(() => { if (!disposed && !preferences.current.deafened) onBlocked(); });
-    return () => { disposed = true; element.removeEventListener('volumechange', applyPreferences); track.detach(element); };
-  }, [track, onBlocked]);
-  useEffect(() => {
-    const element = elementRef.current;
-    if (!element) return;
-    element.muted = deafened;
-    const level = deafened ? 0 : Math.min(1, Math.max(0, volume / 100));
-    track.setVolume(level);
-    element.volume = level;
-  }, [deafened, volume, track]);
-  return <audio ref={elementRef} autoPlay muted={deafened} />;
-}
-
 function ParticipantTile({ participant, username, local, volume, onVolume, onError, compact = false }: {
   participant: Participant; username: string; local: boolean; volume: number; onVolume: (value: number) => void; onError: (message: string) => void; compact?: boolean;
 }) {
@@ -239,10 +210,7 @@ function ParticipantTile({ participant, username, local, volume, onVolume, onErr
     <div className="participant-caption"><span className="participant-name" title={name}><strong>{name}</strong>{local && <small>вы</small>}</span>
       <span className="participant-caption-icons" aria-label={participant.isMicrophoneEnabled ? 'Микрофон включён' : 'Микрофон выключен'}>{participant.isMicrophoneEnabled ? <Mic size={14} /> : <MicOff size={14} />}</span>
     </div>
-    {!local && <details className="participant-volume">
-      <summary aria-label={`Громкость: ${name}`} title="Громкость участника">{volume === 0 ? <VolumeX size={16} /> : <Volume2 size={16} />}</summary>
-      <div className="volume-popover"><label>Громкость <strong>{volume}%</strong><input type="range" min="0" max="100" step="5" value={volume} onChange={event => onVolume(Number(event.target.value))} aria-label={`Громкость ${name}`} /></label></div>
-    </details>}
+    {!local && <ParticipantVolumeControl username={name} value={volume} onChange={onVolume} />}
     {participant.isSpeaking && <span className="speaking-indicator" aria-label="Говорит"><i /><i /><i /></span>}
   </article>;
 }
@@ -269,6 +237,12 @@ export default function CallStage({ channel, user, onLeave, onError, initialPref
   const [audioPreferences, setAudioPreferences] = useState(loadAudioPreferences);
   const audioPreferencesRef = useRef(audioPreferences);
   audioPreferencesRef.current = audioPreferences;
+  useEffect(() => onMicrophoneProcessingError((track, error) => {
+    const current = roomRef.current;
+    if (!current || current.localParticipant.getTrackPublication(Track.Source.Microphone)?.track !== track) return;
+    callbacks.current.onError(`${error.message} Микрофон выключен; выберите другой режим обработки и включите его снова.`);
+    refresh(value => value + 1);
+  }), []);
   const [encryptionState, setEncryptionState] = useState<{ room: Room; fingerprint: string; epoch: string } | null>(null);
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
   const [devicesRequested, setDevicesRequested] = useState(false);
@@ -282,18 +256,23 @@ export default function CallStage({ channel, user, onLeave, onError, initialPref
   const cameraQualityRef = useRef(cameraQuality);
   cameraQualityRef.current = cameraQuality;
   const [shareAudio, setShareAudio] = useState(true);
+  const [allowSystemLoopback, setAllowSystemLoopback] = useState(false);
+  const [shareAudioNotice, setShareAudioNotice] = useState('');
+  const [desktopAudioAvailable, setDesktopAudioAvailable] = useState(false);
   const [desktopScreenAudio, setDesktopScreenAudio] = useState<'checking' | 'filtered' | 'unavailable'>(window.signalDesktop ? 'checking' : 'unavailable');
   useEffect(() => {
     const desktop = window.signalDesktop;
     if (!desktop) return;
     let cancelled = false;
     void desktop.getInfo().then(info => {
-      if (!cancelled) setDesktopScreenAudio(info.screenAudioExcludesOwnAudio === true ? 'filtered' : 'unavailable');
+      if (!cancelled) {
+        setDesktopScreenAudio(info.screenAudioExcludesOwnAudio === true ? 'filtered' : 'unavailable');
+        setDesktopAudioAvailable(info.screenAudioAvailable === true || info.screenAudioExcludesOwnAudio === true);
+      }
     }).catch(() => { if (!cancelled) setDesktopScreenAudio('unavailable'); });
     return () => { cancelled = true; };
   }, []);
-  const [volumes, setVolumes] = useState<Record<string, number>>({});
-  const [shareVolumes, setShareVolumes] = useState<Record<string, number>>({});
+  const { volumes, shareVolumes, setParticipantVolume, setShareVolume } = useParticipantVolumes(user.id);
   const [focusedShare, setFocusedShare] = useState<string | null>(null);
   const focusedShareRef = useRef<string | null>(null);
   const [memberDirectory, setMemberDirectory] = useState<{ channelId: string; usernames: Map<string, string> }>({ channelId: '', usernames: new Map() });
@@ -407,6 +386,7 @@ export default function CallStage({ channel, user, onLeave, onError, initialPref
     const nextRoom = new Room({
       adaptiveStream: false,
       dynacast: true,
+      webAudioMix: true,
       disconnectOnPageLeave: true,
       videoCaptureDefaults: { resolution: { width: 1920, height: 1080, frameRate: 30 } },
       audioCaptureDefaults: microphoneCapture(audioPreferencesRef.current),
@@ -655,19 +635,15 @@ export default function CallStage({ channel, user, onLeave, onError, initialPref
   const changeAudio = (patch: Partial<AudioPreferences>) => act('audio-settings', async current => {
     const previous = audioPreferencesRef.current;
     const next = { ...previous, ...patch };
-    const captureChanged = next.echoCancellation !== previous.echoCancellation || next.autoGainControl !== previous.autoGainControl
-      || next.noiseSuppression !== previous.noiseSuppression || next.noiseEngine !== previous.noiseEngine;
     const track = current.localParticipant.getTrackPublication(Track.Source.Microphone)?.track;
     try {
       if (current.localParticipant.isMicrophoneEnabled && track instanceof LocalAudioTrack) {
-        if (captureChanged) await track.restartTrack({ ...microphoneCapture(next), deviceId: current.getActiveDevice('audioinput') || undefined });
         await applyMicrophoneProcessing(current, next);
       }
     } catch (error) {
       // Restore the previous chain. If that also fails, leave the mic muted.
       try {
         if (track instanceof LocalAudioTrack && current.localParticipant.isMicrophoneEnabled) {
-          await track.restartTrack({ ...microphoneCapture(previous), deviceId: current.getActiveDevice('audioinput') || undefined });
           await applyMicrophoneProcessing(current, previous);
         }
       } catch { await current.localParticipant.setMicrophoneEnabled(false).catch(() => {}); }
@@ -709,10 +685,17 @@ export default function CallStage({ channel, user, onLeave, onError, initialPref
       videoConstraints.height = { max: profile.height };
     }
     const trustedDesktop = Boolean(window.signalDesktop) && desktopScreenAudio === 'filtered';
-    const captureAudio = shareAudio && (!window.signalDesktop || trustedDesktop);
+    if (shareAudio && window.signalDesktop && !allowSystemLoopback && !trustedDesktop) {
+      setSettingsOpen(true);
+      throw new Error(desktopScreenAudio === 'checking'
+        ? 'Проверяем возможности захвата звука. Повторите запуск через несколько секунд.'
+        : 'Эта версия Windows не поддерживает исключение звука Сигнала. Выберите совместимый системный звук с возможным повтором голосов, отключите передачу звука или передавайте отдельную вкладку из Chrome.');
+    }
+    const captureAudio = shareAudio && (!window.signalDesktop || trustedDesktop || (allowSystemLoopback && desktopAudioAvailable));
+    setShareAudioNotice('');
     const displayOptions: DisplayMediaStreamOptions & { systemAudio: 'include' | 'exclude'; selfBrowserSurface: 'exclude'; surfaceSwitching: 'include' } = {
       video: videoConstraints,
-      ...screenAudioCaptureOptions(captureAudio, navigator.mediaDevices.getSupportedConstraints(), trustedDesktop),
+      ...screenAudioCaptureOptions(captureAudio, navigator.mediaDevices.getSupportedConstraints(), trustedDesktop, allowSystemLoopback),
       selfBrowserSurface: 'exclude', surfaceSwitching: 'include',
     };
     // Native modes intentionally omit width/height and bypass the SDK's
@@ -722,8 +705,13 @@ export default function CallStage({ channel, user, onLeave, onError, initialPref
       stream.getTracks().forEach(track => track.stop());
       return;
     }
-    const { warning } = filterScreenAudio(stream, trustedDesktop);
-    if (warning) callbacks.current.onError(warning);
+    const { warning, retainedCount } = await prepareScreenAudio(stream, trustedDesktop, allowSystemLoopback);
+    if (roomRef.current !== current || current.state !== ConnectionState.Connected) {
+      stream.getTracks().forEach(track => track.stop()); return;
+    }
+    const audioNotice = warning || (shareAudio && !retainedCount ? 'Трансляция идёт без звука. В окне выбора включите звук вкладки или системы. Для отдельного окна звук может быть недоступен; выберите экран или другую вкладку.' : '');
+    setShareAudioNotice(audioNotice);
+    if (audioNotice) callbacks.current.onError(audioNotice);
     const capture: ScreenCaptureSession = { room: current, stream, stopped: false, tracks: [], dispose: () => {} };
     const ended = () => {
       releaseScreenCapture(current, capture);
@@ -731,10 +719,17 @@ export default function CallStage({ channel, user, onLeave, onError, initialPref
         if (roomRef.current === current && current.state === ConnectionState.Connected) callbacks.current.onError(messageFor(error));
       });
     };
+    const audioEnded = () => {
+      if (screenCaptureRef.current === capture && shareAudio && !stream.getAudioTracks().some(track => track.readyState === 'live')) {
+        setShareAudioNotice('Источник завершил передачу звука. Остановите трансляцию и выберите источник со звуком повторно.');
+      }
+    };
+    stream.getAudioTracks().forEach(track => track.addEventListener('ended', audioEnded));
     capture.dispose = () => {
       if (capture.stopped) return;
       capture.stopped = true;
       stream.getVideoTracks().forEach(track => track.removeEventListener('ended', ended));
+      stream.getAudioTracks().forEach(track => track.removeEventListener('ended', audioEnded));
       capture.tracks.forEach(track => track.stop());
       stream.getTracks().forEach(track => track.stop());
     };
@@ -749,7 +744,7 @@ export default function CallStage({ channel, user, onLeave, onError, initialPref
       const videoTrack = new LocalVideoTrack(mediaTrack, undefined, true);
       videoTrack.source = Track.Source.ScreenShare;
       capture.tracks.push(videoTrack);
-      const codec = await chooseScreenCodec(screenCodec, mediaTrack, profile.fps, screenBitrate);
+      const codec = await chooseScreenCodec(screenCodec, mediaTrack, profile.fps, screenBitrate, screenContent);
       if (capture.stopped || roomRef.current !== current || current.state !== ConnectionState.Connected) { releaseScreenCapture(current, capture); return; }
       const vp9 = codec === 'vp9';
       const encoding = { maxBitrate: screenBitrate, maxFramerate: profile.fps };
@@ -762,7 +757,7 @@ export default function CallStage({ channel, user, onLeave, onError, initialPref
         scalabilityMode: vp9 ? 'L1T3' : undefined,
         videoEncoding: encoding, screenShareEncoding: encoding,
         simulcast: false, videoSimulcastLayers: [], screenShareSimulcastLayers: [],
-        degradationPreference: 'maintain-resolution',
+        degradationPreference: screenContent === 'motion' ? 'maintain-framerate' : 'maintain-resolution',
       });
       if (capture.stopped || roomRef.current !== current) {
         releaseScreenCapture(current, capture);
@@ -810,6 +805,7 @@ export default function CallStage({ channel, user, onLeave, onError, initialPref
   const cameraOn = room?.localParticipant.isCameraEnabled ?? false;
   const sharing = room?.localParticipant.isScreenShareEnabled ?? false;
   const remote = participants.filter((participant): participant is RemoteParticipant => !participant.isLocal);
+  const ptt = usePushToTalk(room, audioPreferences, connected && microphoneOn && !deafened);
   const statusLabel = connected ? 'Вы в голосовом канале' : state === ConnectionState.Reconnecting || state === ConnectionState.SignalReconnecting ? 'Восстанавливаем связь…' : connectionError ? 'Нет соединения' : 'Подключаемся…';
   const supportedAudio = navigator.mediaDevices?.getSupportedConstraints() || {};
   const sourceAudioSettings = room?.localParticipant.getTrackPublication(Track.Source.Microphone)?.audioTrack?.getSourceTrackSettings();
@@ -854,13 +850,13 @@ export default function CallStage({ channel, user, onLeave, onError, initialPref
 
     {room && <>
       {audioBlocked && !deafened && <div className="audio-unlock" role="status"><Volume2 size={18} /><span>Браузер ожидает разрешения на воспроизведение звука.</span><button onClick={() => act('audio', async current => { await current.startAudio(); if (roomRef.current === current) setAudioBlocked(!current.canPlaybackAudio); })}>Включить звук</button></div>}
-      <div className="remote-audio" aria-hidden="true">{remote.flatMap(participant => [...participant.audioTrackPublications.values()].map(publication => publication.audioTrack instanceof RemoteAudioTrack && (publication.source !== Track.Source.ScreenShareAudio || participant.identity === shareParticipant?.identity) ? <RemoteAudio key={publication.trackSid} track={publication.audioTrack} deafened={deafened} volume={(publication.source === Track.Source.ScreenShareAudio ? shareVolumes : volumes)[participant.identity] ?? 100} onBlocked={markAudioBlocked} /> : null))}</div>
+      <div className="remote-audio" aria-hidden="true">{remote.flatMap(participant => [...participant.audioTrackPublications.values()].map(publication => publication.audioTrack instanceof RemoteAudioTrack && (publication.source !== Track.Source.ScreenShareAudio || participant.identity === shareParticipant?.identity) ? <RemoteCallAudio key={publication.trackSid} room={room} track={publication.audioTrack} outputVolume={audioPreferences.outputVolume} deafened={deafened} volume={(publication.source === Track.Source.ScreenShareAudio ? shareVolumes : volumes)[participant.identity] ?? 100} onBlocked={markAudioBlocked} /> : null))}</div>
       <div className={`call-media-layout${shareParticipant ? ' has-screen-share' : ''}`}>
-      {shareParticipant && <ScreenShareFrame username={usernameFor(shareParticipant)} onError={message => callbacks.current.onError(message)} audio={shareParticipant.isLocal ? undefined : { available: Boolean(shareParticipant.getTrackPublication(Track.Source.ScreenShareAudio) && !shareParticipant.getTrackPublication(Track.Source.ScreenShareAudio)?.isMuted), volume: shareVolumes[shareParticipant.identity] ?? 100, onVolume: volume => setShareVolumes(previous => ({ ...previous, [shareParticipant.identity]: Math.min(100, Math.max(0, volume)) })) }}>
+      {shareParticipant && <ScreenShareFrame username={usernameFor(shareParticipant)} onError={message => callbacks.current.onError(message)} notice={shareParticipant.isLocal ? shareAudioNotice : undefined} audio={shareParticipant.isLocal ? undefined : { available: Boolean(shareParticipant.getTrackPublication(Track.Source.ScreenShareAudio) && !shareParticipant.getTrackPublication(Track.Source.ScreenShareAudio)?.isMuted), volume: shareVolumes[shareParticipant.identity] ?? 100, onVolume: volume => setShareVolume(shareParticipant.identity, volume) }}>
         <div className="share-video-wrap">{shareTrack ? <MediaVideo track={shareTrack} local={shareParticipant.isLocal} screen /> : <div className="share-loading"><LoaderCircle className="spin" size={24} /><span>Подключаем выбранную демонстрацию…</span></div>}</div>
         {shares.length > 1 && <div className="share-switcher">{shares.map(participant => <button key={participant.identity} className={participant === shareParticipant ? 'active' : ''} aria-pressed={participant === shareParticipant} onClick={() => focusShare(participant.identity)}>{usernameFor(participant)}</button>)}</div>}
       </ScreenShareFrame>}
-      <div className={`participant-grid${shareParticipant ? ' thumbnails' : ''}`} data-participants={participants.length} role="list" aria-label="Участники звонка">{participants.map(participant => <ParticipantTile key={participant.identity} participant={participant} username={usernameFor(participant)} local={participant.isLocal} compact={!!shareParticipant} volume={volumes[participant.identity] ?? 100} onVolume={value => setVolumes(previous => ({ ...previous, [participant.identity]: value }))} onError={message => callbacks.current.onError(message)} />)}</div>
+      <div className={`participant-grid${shareParticipant ? ' thumbnails' : ''}`} data-participants={participants.length} role="list" aria-label="Участники звонка">{participants.map(participant => <ParticipantTile key={participant.identity} participant={participant} username={usernameFor(participant)} local={participant.isLocal} compact={!!shareParticipant} volume={volumes[participant.identity] ?? 100} onVolume={value => setParticipantVolume(participant.identity, value)} onError={message => callbacks.current.onError(message)} />)}</div>
       </div>
       {participants.length === 1 && !shareParticipant && <div className="call-alone"><p>{channel.kind === 'direct' ? 'Ожидаем собеседника в личном разговоре.' : 'Вы пока одни в голосовом канале. Пригласите друзей.'}</p></div>}
     </>}
@@ -868,40 +864,30 @@ export default function CallStage({ channel, user, onLeave, onError, initialPref
     {settingsOpen && <CallSettingsDrawer onClose={() => setSettingsOpen(false)}><div className="call-settings"><div className="settings-heading"><h3>Устройства</h3><button className="text-button" onClick={() => void listDevices()}><RefreshCw size={14} />Обновить устройства</button></div>
       <div className="device-grid">{(['audioinput', 'audiooutput', 'videoinput'] as const).map(kind => <label key={kind}>{kind === 'audioinput' ? 'Микрофон' : kind === 'audiooutput' ? 'Наушники / динамики' : 'Камера'}<select value={deviceSelection[kind]} disabled={!connected || !!busy || (kind === 'audiooutput' && !('setSinkId' in HTMLMediaElement.prototype))} onChange={event => changeDevice(kind, event.target.value)}><option value="default">По умолчанию</option>{devices.filter(device => device.kind === kind && device.deviceId !== 'default' && device.deviceId !== '').map((device, index) => <option key={device.deviceId} value={device.deviceId}>{device.label || `${kind === 'videoinput' ? 'Камера' : 'Устройство'} ${index + 1}`}</option>)}</select></label>)}</div>
       <p className="settings-hint">Названия устройств появятся после разрешения браузера. Выбор динамиков доступен в поддерживаемых браузерах.</p>
-      <section className="voice-settings" aria-label="Обработка голоса">
-        <h3>Голос и обработка</h3>
-        <p className="settings-hint">Opus высокого качества · до 96 кбит/с · приоритет звука · защита от потерь RED. Автоматическая пауза передачи отключена, чтобы сохранять тихие звуки.</p>
-        <div className="voice-preset-buttons"><button type="button" disabled={!connected || !!busy} onClick={() => changeAudio({ noiseEngine: 'browser', noiseSuppression: false, echoCancellation: true, autoGainControl: false, gateEnabled: true, gateThreshold: -60 })}>Естественный голос</button><button type="button" disabled={!connected || !!busy || !supportedAudio.noiseSuppression} onClick={() => changeAudio({ noiseEngine: 'browser', noiseSuppression: true, echoCancellation: true, autoGainControl: false, gateEnabled: true, gateThreshold: -50 })}>Шумное место</button></div>
-        <div className="voice-settings-grid">
-          <label>Обработка шума<select value={audioPreferences.noiseEngine} disabled={!connected || !!busy} onChange={event => changeAudio({ noiseEngine: event.target.value as AudioPreferences['noiseEngine'] })}><option value="browser">Средствами браузера</option><option value="rnnoise" disabled={!('AudioWorkletNode' in window)}>RNNoise · на этом устройстве</option></select></label>
-          {audioPreferences.noiseEngine === 'rnnoise' && <label>Профиль RNNoise<select value={audioPreferences.rnnoisePreset} disabled={!connected || !!busy} onChange={event => changeAudio({ rnnoisePreset: event.target.value as AudioPreferences['rnnoisePreset'] })}><option value="natural">Естественный</option><option value="balanced">Сбалансированный</option><option value="strong">Сильное подавление</option></select></label>}
-          <label>Громкость микрофона <strong>{audioPreferences.microphoneGain}%</strong><input aria-label="Громкость микрофона" type="range" min="0" max="200" step="5" value={audioPreferences.microphoneGain} disabled={!connected || !!busy} onChange={event => changeAudio({ microphoneGain: Number(event.target.value) })} /></label>
-          <label>Порог фонового шума <strong>{audioPreferences.gateThreshold} дБ</strong><input aria-label="Порог фонового шума" type="range" min="-70" max="-20" step="1" value={audioPreferences.gateThreshold} disabled={!connected || !!busy || !audioPreferences.gateEnabled} onChange={event => changeAudio({ gateThreshold: Number(event.target.value) })} /></label>
-        </div>
-        <div className="voice-switches">
-          <label><input type="checkbox" checked={audioPreferences.echoCancellation} disabled={!connected || !!busy || !supportedAudio.echoCancellation} onChange={event => changeAudio({ echoCancellation: event.target.checked })} />Подавлять эхо</label>
-          <label><input type="checkbox" checked={audioPreferences.autoGainControl} disabled={!connected || !!busy || !supportedAudio.autoGainControl} onChange={event => changeAudio({ autoGainControl: event.target.checked })} />Автоматическая громкость</label>
-          <label><input type="checkbox" checked={audioPreferences.noiseSuppression && audioPreferences.noiseEngine === 'browser'} disabled={!connected || !!busy || audioPreferences.noiseEngine !== 'browser' || !supportedAudio.noiseSuppression} onChange={event => changeAudio({ noiseSuppression: event.target.checked })} />Шумоподавление браузера</label>
-          <label><input type="checkbox" checked={audioPreferences.gateEnabled} disabled={!connected || !!busy || (!('AudioWorkletNode' in window) && !audioPreferences.gateEnabled)} onChange={event => changeAudio({ gateEnabled: event.target.checked })} />Приглушать фон между словами</label>
-        </div>
-        <p className="settings-hint">RNNoise работает локально. При его выборе шумоподавление браузера отключается, а подавление эха остаётся доступным. Более высокий порог сильнее убирает фон, но может обрезать тихую речь.</p>
-        {microphoneOn && <p className="voice-processing-state">Устройство сообщает: эхо — {sourceAudioSettings?.echoCancellation === undefined ? 'неизвестно' : sourceAudioSettings.echoCancellation ? 'включено' : 'выключено'}, шумоподавление браузера — {sourceAudioSettings?.noiseSuppression === undefined ? 'неизвестно' : sourceAudioSettings.noiseSuppression ? 'включено' : 'выключено'}, автоматическая громкость — {sourceAudioSettings?.autoGainControl === undefined ? 'неизвестно' : sourceAudioSettings.autoGainControl ? 'включена' : 'выключена'}.</p>}
-      </section>
+      <VoiceSettings value={audioPreferences} onChange={changeAudio} disabled={!connected || !!busy} supportedAudio={supportedAudio} microphoneOn={microphoneOn} sourceAudioSettings={sourceAudioSettings} />
       <label>Качество входящего видео<select value={cameraQuality} onChange={event => setCameraQuality(event.target.value as 'high' | 'medium')}><option value="high">Высокое · до 1080p</option><option value="medium">Экономия · до 360p</option></select></label>
       <p className="settings-hint">Высокое качество требует достаточной скорости сети. Фактическое разрешение видно на видео; при перегрузке сети оно может снижаться.</p>
       <h3>Трансляция экрана</h3>
+      <div className="share-preset-buttons" role="group" aria-label="Профили трансляции"><button type="button" disabled={sharing || busy === 'screen'} onClick={() => { setScreenProfile('1080p60'); setScreenBitrate(12_000_000); setScreenContent('motion'); setScreenCodec('auto'); }}>Игры · 1080p / 60 fps</button><button type="button" disabled={sharing || busy === 'screen'} onClick={() => { setScreenProfile('source30'); setScreenBitrate(24_000_000); setScreenContent('text'); setScreenCodec('auto'); }}>Текст · исходное / 30 fps</button></div>
       <div className="share-settings"><label>Разрешение и частота<select value={screenProfile} disabled={sharing || busy === 'screen'} onChange={event => setScreenProfile(event.target.value as ScreenProfile)}>{Object.entries(SCREEN_PROFILES).map(([value, profile]) => <option key={value} value={value}>{profile.label}</option>)}</select></label>
         <label>Максимальный битрейт<select value={screenBitrate} disabled={sharing || busy === 'screen'} onChange={event => setScreenBitrate(Number(event.target.value))}><option value={12_000_000}>12 Мбит/с</option><option value={24_000_000}>24 Мбит/с · высокое качество</option><option value={40_000_000}>40 Мбит/с · максимум</option></select></label>
         <label>Что показываете<select value={screenContent} disabled={sharing || busy === 'screen'} onChange={event => setScreenContent(event.target.value as 'text' | 'motion')}><option value="text">Текст и приложения · чёткость</option><option value="motion">Игры и видео · движение</option></select></label>
         <label>Кодек экрана<select value={screenCodec} disabled={sharing || busy === 'screen'} onChange={event => setScreenCodec(event.target.value as ScreenCodecChoice)}><option value="auto">Авто · оценка браузера</option><option value="h264" disabled={!screenCodecs.includes('h264')}>H.264{!screenCodecs.includes('h264') ? ' · недоступен' : ''}</option><option value="vp9" disabled={!screenCodecs.includes('vp9')}>VP9{!screenCodecs.includes('vp9') ? ' · недоступен' : ''}</option><option value="vp8" disabled={!screenCodecs.includes('vp8')}>VP8{!screenCodecs.includes('vp8') ? ' · недоступен' : ''}</option></select></label>
-        <label className="checkbox-label"><input type="checkbox" checked={shareAudio && (!window.signalDesktop || desktopScreenAudio === 'filtered')} disabled={sharing || busy === 'screen' || Boolean(window.signalDesktop && desktopScreenAudio !== 'filtered')} onChange={event => setShareAudio(event.target.checked)} />Передавать звук вкладки / системы</label></div>
+        <label className="checkbox-label"><input type="checkbox" checked={shareAudio} disabled={sharing || busy === 'screen'} onChange={event => setShareAudio(event.target.checked)} />Передавать звук вкладки / системы</label>
+        <label>Захват звука<select value={allowSystemLoopback ? 'compatible' : 'isolated'} disabled={sharing || busy === 'screen' || Boolean(window.signalDesktop && desktopScreenAudio === 'checking')} onChange={event => setAllowSystemLoopback(event.target.value === 'compatible')}><option value="isolated">Исключать голоса звонка</option><option value="compatible" disabled={Boolean(window.signalDesktop && !desktopAudioAvailable)}>Совместимый системный звук</option></select></label></div>
+        <p className="settings-hint">{allowSystemLoopback ? 'Совместимый режим передаёт весь выбранный системный звук, включая голоса звонка. Для исключения голосов выберите отдельную вкладку или режим исключения звука Сигнала на поддерживаемой системе.' : 'В приложении исключается звук Сигнала. При захвате всего экрана в Chrome исключение может затрагивать звук всего браузера; звук другой выбранной вкладки передаётся отдельно.'}</p>
+        {!window.signalDesktop && !allowSystemLoopback && !supportsScreenAudioExclusion(supportedAudio) && <p className="settings-hint" role="status">Этот браузер не сообщает о поддержке исключения своего системного звука. В этом режиме выбирайте другую вкладку со звуком. Для игры можно явно включить совместимый системный захват с возможным повтором голосов.</p>}
+        {shareAudioNotice && <p className="settings-hint" role="status">{shareAudioNotice}</p>}
       <p className="settings-hint">Исходное разрешение; WebRTC использует сжатие. Фактическое качество зависит от сети. Для смены параметров остановите трансляцию.</p>
+      <p className="settings-hint">{screenContent === 'motion' ? 'Игры и видео: приоритет плавности. При нехватке скорости или мощности разрешение может снизиться; выбранная частота — цель, а не гарантия. Игровой профиль задаёт до 1080p, 60 fps и 12 Мбит/с.' : 'Текст и приложения: приоритет чёткости. При нехватке скорости или мощности частота кадров может снизиться. Для игры выберите профиль «Игры».'}</p>
       <p className="settings-hint">Для звука включите его передачу в окне выбора экрана или вкладки браузера.</p>
-      {window.signalDesktop && desktopScreenAudio === 'unavailable' && <p className="settings-hint">Эта версия Windows не поддерживает захват системного звука с исключением голосов звонка. Для передачи звука отдельной вкладки откройте Сигнал в браузере.</p>}
+      {window.signalDesktop && desktopScreenAudio === 'unavailable' && <p className="settings-hint">На этой версии Windows автоматическое исключение голосов недоступно. Для системного звука можно выбрать совместимый режим, а для звука отдельной вкладки — открыть Сигнал в браузере.</p>}
       <p className="settings-hint">«Авто» учитывает оценку кодирования браузером. При нехватке процессора или полосы частота кадров может падать. Получаем только видео и звук выбранной демонстрации.</p>
     </div></CallSettingsDrawer>}
 
-    <div className="call-toolbar"><div className="toolbar-main">
+    <div className="call-toolbar">
+      {ptt.active && <button type="button" className={'push-to-talk-control' + (ptt.pressed ? ' transmitting' : '')} disabled={!ptt.enabled} aria-pressed={ptt.pressed} onPointerDown={ptt.press} onPointerUp={ptt.release} onPointerCancel={ptt.release} onLostPointerCapture={ptt.release}><Mic size={16}/>{ptt.pressed ? 'Передаём голос' : 'Удерживайте для разговора'} <kbd>{pushToTalkKeyLabel(audioPreferences.pushToTalkKey)}</kbd></button>}
+      <div className="toolbar-main">
       <button className={`call-control${microphoneOn ? '' : ' off'}`} disabled={!connected || !!busy} onClick={toggleMicrophone} title={microphoneOn ? 'Выключить микрофон' : 'Включить микрофон'} aria-label={microphoneOn ? 'Выключить микрофон' : 'Включить микрофон'} aria-pressed={microphoneOn}>{busy === 'microphone' ? <LoaderCircle className="spin" size={21} /> : microphoneOn ? <Mic size={21} /> : <MicOff size={21} />}<span>Микрофон</span></button>
       <button className={`call-control${deafened ? ' off' : ''}`} disabled={!connected} onClick={toggleDeafened} title={deafened ? 'Включить звук' : 'Отключить входящий звук'} aria-label={deafened ? 'Включить входящий звук' : 'Отключить входящий звук'} aria-pressed={!deafened}>{deafened ? <HeadphoneOff size={21} /> : <Headphones size={21} />}<span>Наушники</span></button>
       <span className="toolbar-divider" />

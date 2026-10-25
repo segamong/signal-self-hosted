@@ -3,18 +3,20 @@ import { Maximize2, Minimize2, MonitorUp, Volume2, VolumeX } from 'lucide-react'
 import { useElementFullscreen } from './useElementFullscreen';
 import './screen-share.css';
 
-export default function ScreenShareFrame({ username, children, onError, audio }: {
+export default function ScreenShareFrame({ username, children, onError, audio, notice }: {
   username: string;
   children: ReactNode;
   onError: (message: string) => void;
   audio?: { available: boolean; volume: number; onVolume: (volume: number) => void };
+  notice?: string;
 }) {
   const { elementRef, fullscreen, toggle } = useElementFullscreen<HTMLDivElement>(onError);
   const previousVolume = useRef(100);
   if (audio && audio.volume > 0) previousVolume.current = audio.volume;
   return <div ref={elementRef} className="share-stage" onDoubleClick={event => { if (event.target instanceof HTMLVideoElement) toggle(); }}>
-    <div className="share-title"><span><MonitorUp size={16} />{username} <small>демонстрирует экран</small></span>
+    <div className="share-title"><span className="share-owner"><MonitorUp size={16} /><strong className="share-username" title={username}>{username}</strong><small>демонстрирует экран</small></span>
       <div className="share-actions">
+      {notice && <span className="share-audio-notice" role="status" title={notice} aria-label={notice}><VolumeX size={15}/><span>Проверьте звук</span></span>}
       {audio && <div className="share-audio-control" role="group" aria-label="Звук трансляции" title={audio.available ? 'Громкость трансляции, отдельно от голоса' : 'Автор не передаёт звук трансляции'}>
         <button type="button" className="share-audio-toggle" disabled={!audio.available} aria-label={audio.volume === 0 ? 'Включить звук трансляции' : 'Отключить звук трансляции'} aria-pressed={audio.volume > 0} onClick={() => audio.onVolume(audio.volume === 0 ? previousVolume.current : 0)}>{audio.volume === 0 ? <VolumeX size={17}/> : <Volume2 size={17}/>}</button>
         <input type="range" min="0" max="100" step="1" value={audio.volume} disabled={!audio.available} aria-label="Громкость трансляции" onChange={event => audio.onVolume(Number(event.target.value))}/>

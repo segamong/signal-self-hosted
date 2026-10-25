@@ -1,6 +1,14 @@
 export type ScreenCodec = 'h264' | 'vp9' | 'vp8';
 export type ScreenCodecChoice = 'auto' | ScreenCodec;
+export type ScreenContent = 'text' | 'motion';
 const PREFERENCE: ScreenCodec[] = ['vp9', 'h264', 'vp8'];
+const CONTENT_PREFERENCE: Record<ScreenContent, readonly ScreenCodec[]> = {
+  text: ['vp9', 'h264', 'vp8'],
+  // An unavailable capability estimate must not force high-resolution gameplay
+  // through VP9. Prefer the broadly accelerated H.264 path, then VP8. This is
+  // a fallback order, not a claim that any device has a hardware encoder.
+  motion: ['h264', 'vp8', 'vp9'],
+};
 
 export function availableScreenCodecs(): ScreenCodec[] {
   try {
@@ -30,13 +38,14 @@ async function encodingEstimate(codec: ScreenCodec, width: number, height: numbe
   }
 }
 
-export async function chooseScreenCodec(choice: ScreenCodecChoice, track: MediaStreamTrack, fps: number, bitrate: number): Promise<ScreenCodec> {
-  const available = availableScreenCodecs();
+export async function chooseScreenCodec(choice: ScreenCodecChoice, track: MediaStreamTrack, fps: number, bitrate: number, content: ScreenContent = 'text'): Promise<ScreenCodec> {
+  const capabilities = availableScreenCodecs();
+  const available = CONTENT_PREFERENCE[content].filter(codec => capabilities.includes(codec));
   if (choice !== 'auto') {
     if (!available.includes(choice)) throw new Error('Выбранный кодек недоступен в этом браузере. Выберите «Авто» или другой кодек.');
     return choice;
   }
-  const fallback = available.includes('vp9') ? 'vp9' : available.includes('vp8') ? 'vp8' : available[0];
+  const fallback = available[0];
   if (!fallback) throw new Error('Браузер не сообщил о поддерживаемом кодеке видео.');
   const { width, height } = track.getSettings();
   if (!width || !height) return fallback;
@@ -46,11 +55,15 @@ export async function chooseScreenCodec(choice: ScreenCodecChoice, track: MediaS
   const estimates = await Promise.all(available.map(async codec => ({ codec, info: await encodingEstimate(codec, width, height, fps, bitrate) })));
   const efficient = estimates.find(item => item.info?.supported === true && item.info.smooth === true && item.info.powerEfficient === true);
   if (efficient) return efficient.codec;
-  // Keep the old VP9 fallback when the query is absent or inconclusive. An
-  // explicit negative for it can use a positively supported alternative.
-  if (estimates.find(item => item.codec === fallback)?.info?.supported === false) {
-    const supported = estimates.find(item => item.info?.supported === true);
-    if (supported) return supported.codec;
-  }
-  return fallback;
+  // Smoothness matters even when the browser cannot mark an encoder as power
+  // efficient. Previously a known-slow VP9 estimate still won over smooth
+  // H.264 whenever neither reported powerEfficient=true.
+  const smooth = estimates.find(item => item.info?.supported === true && item.info.smooth === true);
+  if (smooth) return smooth.codec;
+  // Prefer an unknown estimate over one that explicitly cannot keep up. If all
+  // estimates are negative, capabilities still allow a manual attempt; do not
+  // silently change the user's requested resolution, bitrate or frame rate.
+  return estimates.find(item => item.info?.supported !== false && item.info?.smooth !== false)?.codec
+    ?? estimates.find(item => item.info?.supported !== false)?.codec
+    ?? fallback;
 }

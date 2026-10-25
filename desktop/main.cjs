@@ -10,6 +10,7 @@ const { SERVER_ORIGIN, SERVER_WEBSOCKET, APP_URL, PICKER_URL, isAppUrl, apiTarge
 const { createManualUpdater } = require('./updater.cjs');
 const { supportsOwnAudioExclusion } = require('./capture-audio.cjs');
 const isPortable = Boolean(process.env.PORTABLE_EXECUTABLE_FILE);
+const screenAudioAvailable = process.platform === 'win32';
 const screenAudioExcludesOwnAudio = supportsOwnAudioExclusion(os.platform(), os.release());
 
 protocol.registerSchemesAsPrivileged([{ scheme: 'app', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } }]);
@@ -282,7 +283,7 @@ function finishCapture(selection) {
     if (!selection || !mainWindow || mainWindow.isDestroyed() || pending.frame !== mainWindow.webContents.mainFrame || !isAppUrl(pending.frame.url)) return pending.callback(null);
     const source = pending.sources.find((item) => item.id === selection.id);
     if (!source) return pending.callback(null);
-    pending.callback({ video: source, ...(selection.audio && pending.audioAvailable && screenAudioExcludesOwnAudio ? { audio: 'loopback' } : {}) });
+    pending.callback({ video: source, ...(selection.audio && pending.audioAvailable ? { audio: 'loopback' } : {}) });
   } catch { /* Destroyed frame: Chromium already rejects the request. */ }
 }
 
@@ -337,7 +338,10 @@ function configureSession() {
       minWidth: 650, minHeight: 560, show: false, autoHideMenuBar: true, backgroundColor: '#11131c',
       webPreferences: { session: clientSession, preload: path.join(__dirname, 'picker', 'preload.cjs'), sandbox: true, contextIsolation: true, nodeIntegration: false, webSecurity: true, spellcheck: false },
     });
-    capture = { window: picker, callback, frame: request.frame, sources: [], audioAvailable: screenAudioExcludesOwnAudio && request.audioRequested, timer: setTimeout(() => finishCapture(null), 120000) };
+    // The renderer requests audio only after selecting filtered capture or
+    // explicitly enabling compatible system capture. The picker still asks
+    // for consent before returning a Windows loopback stream.
+    capture = { window: picker, callback, frame: request.frame, sources: [], audioAvailable: screenAudioAvailable && request.audioRequested, timer: setTimeout(() => finishCapture(null), 120000) };
     hardenWindow(picker);
     picker.on('closed', () => { if (capture?.window === picker) finishCapture(null); });
     picker.once('ready-to-show', () => picker.show());
@@ -346,7 +350,7 @@ function configureSession() {
 }
 
 function configureIpc() {
-  ipcMain.handle('signal:info', (event) => { requireMainSender(event); return { version: app.getVersion(), serverOrigin: SERVER_ORIGIN, platform: process.platform, packaged: app.isPackaged, portable: isPortable, screenAudioExcludesOwnAudio }; });
+  ipcMain.handle('signal:info', (event) => { requireMainSender(event); return { version: app.getVersion(), serverOrigin: SERVER_ORIGIN, platform: process.platform, packaged: app.isPackaged, portable: isPortable, screenAudioAvailable, screenAudioExcludesOwnAudio }; });
   ipcMain.handle('signal:api', (event, pathname, body) => { requireMainSender(event); return requestApi(pathname, body); });
   ipcMain.handle('signal:update-state', (event) => { requireMainSender(event); return updater.getState(); });
   ipcMain.handle('signal:update-check', (event) => { requireMainSender(event); return updater.checkUpdate(); });
@@ -404,7 +408,7 @@ function configureIpc() {
     const sources = await desktopCapturer.getSources({ types: ['screen', 'window'], thumbnailSize: { width: 480, height: 270 }, fetchWindowIcons: false });
     if (capture !== current || !isPickerSender(event)) throw new Error('Выбор источника уже закрыт.');
     current.sources = sources.filter((source) => !source.name.includes('Выберите экран · Сигнал'));
-    return { sources: current.sources.map((source) => ({ id: source.id, name: source.name, thumbnail: source.thumbnail.toDataURL() })), audioAvailable: current.audioAvailable };
+    return { sources: current.sources.map((source) => ({ id: source.id, name: source.name, thumbnail: source.thumbnail.toDataURL() })), audioAvailable: current.audioAvailable, screenAudioExcludesOwnAudio };
   });
   ipcMain.handle('signal:picker-select', (event, selection) => {
     requirePickerSender(event);

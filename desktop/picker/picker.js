@@ -4,6 +4,7 @@ let sources = [];
 let selected = null;
 let category = 'screen';
 let busy = false;
+let audioChoiceInitialized = false;
 const list = document.getElementById('sources');
 const share = document.getElementById('share');
 const audio = document.getElementById('audio');
@@ -38,6 +39,21 @@ async function refresh() {
     const result = await window.signalPicker.getSources();
     sources = result.sources;
     document.getElementById('audio-label').hidden = !result.audioAvailable;
+    audio.disabled = !result.audioAvailable;
+    // The main renderer requests audio only after the user enabled sharing it.
+    // Reflect that explicit choice in the picker instead of silently resetting
+    // every capture to video-only. Refreshing sources preserves later changes.
+    if (!audioChoiceInitialized) {
+      audio.checked = result.audioAvailable === true;
+      audioChoiceInitialized = true;
+    }
+    if (!result.audioAvailable) audio.checked = false;
+    const unfilteredAudio = result.audioAvailable && !result.screenAudioExcludesOwnAudio;
+    const audioDescription = document.getElementById('audio-description');
+    audioDescription.classList.toggle('audio-warning', unfilteredAudio);
+    audioDescription.textContent = unfilteredAudio
+      ? 'Совместимый режим передаёт весь звук компьютера, включая голоса звонка Сигнала. Участники могут услышать себя повторно. При появлении эха отключите звук трансляции.'
+      : 'В режиме исключения голосов передаётся звук других программ. В совместимом режиме передаётся весь звук компьютера, включая голоса звонка. Режим выбирается в настройках трансляции.';
     if (!sources.some((source) => source.id === selected)) selected = null;
     render();
   } catch {
