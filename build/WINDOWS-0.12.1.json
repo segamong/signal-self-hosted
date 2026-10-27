@@ -1,0 +1,22 @@
+{
+  "version": "0.12.1",
+  "sourceCommit": "45da104008798749c38326e0c838de6685ff7134",
+  "files": [
+    {
+      "filename": "Signal-Setup-0.12.1-x64.exe",
+      "size": 93280105,
+      "sha256": "bdfafde35ebe31ad4bb7059ca9097c79eb80f9f137c27e6da49505693a676762"
+    },
+    {
+      "filename": "Signal-Portable-0.12.1-x64.exe",
+      "size": 93161029,
+      "sha256": "c727c900cb2a29eb64bc08cfcd86aa2289de2702653b34b331cfe51764d6cfbd"
+    }
+  ],
+  "typescript": true,
+  "productionBuild": true,
+  "originRegressionTests": 2,
+  "vpnTests": 26,
+  "installedVersion": "0.12.1",
+  "windowsUiConnected": true
+}
