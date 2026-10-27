@@ -2,8 +2,8 @@
 
 const path = require('node:path');
 
-const SERVER_ORIGIN = 'https://13.143.172.92:9443';
-const SERVER_WEBSOCKET = 'wss://13.143.172.92:9443/api/ws';
+const SERVER_ORIGIN = 'https://signal-on.ru';
+const SERVER_WEBSOCKET = `${SERVER_ORIGIN.replace('https:', 'wss:')}/api/ws`;
 const APP_URL = 'app://signal/index.html';
 const PICKER_URL = 'app://picker/index.html';
 const ID = '[A-Za-z0-9_-]{1,100}';
@@ -77,7 +77,7 @@ function assetPath(root, pathname) {
 function isServerNetwork(value) {
   try {
     const url = new URL(value);
-    return ['https:', 'wss:'].includes(url.protocol) && url.hostname === '13.143.172.92' && url.port === '9443' && !url.username && !url.password;
+    return [SERVER_ORIGIN, SERVER_ORIGIN.replace('https:', 'wss:')].includes(url.origin) && !url.username && !url.password;
   } catch { return false; }
 }
 

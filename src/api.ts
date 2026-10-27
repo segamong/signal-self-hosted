@@ -1,5 +1,5 @@
 import { androidApi } from './androidBridge';
-export const SERVER_ORIGIN = 'https://13.143.172.92:9443';
+export const SERVER_ORIGIN = 'https://signal-on.ru';
 
 type DesktopEvent = {type:string;[key:string]:unknown};
 type DesktopSettings = {openAtLogin:boolean;closeToTray:boolean};

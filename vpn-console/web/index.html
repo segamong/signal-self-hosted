@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#0b0d19">
+    <meta name="color-scheme" content="dark">
+    <meta name="robots" content="noindex, nofollow">
+    <meta name="description" content="Личный кабинет Signal VPN — создание и управление защищёнными подключениями.">
+    <title>Signal — личный VPN</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='18' fill='%238b77ff'/%3E%3Cpath d='M35 11 19 35h12l-3 18 17-25H33z' fill='white'/%3E%3C/svg%3E">
+    <link rel="stylesheet" href="/manage/style.css">
+    <script src="/manage/vendor/qrcode.js" defer></script>
+    <script src="/manage/app.js" defer></script>
+  </head>
+  <body>
+    <div id="app">
+      <div class="initial-loading" role="status"><span class="brand-mark" aria-hidden="true">ϟ</span><span>Открываем Signal<span class="loading-dots">…</span></span></div>
+    </div>
+    <div id="toast-region" class="toast-region" role="status" aria-live="polite" aria-atomic="true"></div>
+
+    <dialog id="create-dialog" class="modal">
+      <form id="create-form" class="modal-content">
+        <div class="modal-heading"><div><span class="eyebrow">НОВОЕ ПОДКЛЮЧЕНИЕ</span><h2>Добавьте устройство</h2></div><button type="button" class="icon-button close-dialog" aria-label="Закрыть"><span aria-hidden="true">×</span></button></div>
+        <p class="muted modal-intro">Отдельный профиль для каждого устройства. Его доступ можно отключить в любой момент. При изменении списка профилей устройства могут ненадолго переподключиться.</p>
+        <label class="field-label" for="profile-name">Название</label>
+        <input id="profile-name" name="name" type="text" maxlength="48" placeholder="Например, мой телефон" required autocomplete="off">
+        <fieldset class="device-fieldset"><legend class="field-label">Устройство</legend><div class="device-options">
+          <label class="device-option"><input type="radio" name="device" value="android" checked><span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><rect x="7" y="2.5" width="10" height="19" rx="2.5"/><path d="M10 5h4M11 18.5h2"/></svg>Android</span></label>
+          <label class="device-option"><input type="radio" name="device" value="windows"><span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 21h8M12 16v5"/></svg>Windows</span></label>
+          <label class="device-option"><input type="radio" name="device" value="other"><span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/><circle cx="9" cy="6" r="2" fill="currentColor"/><circle cx="15" cy="12" r="2" fill="currentColor"/><circle cx="8" cy="18" r="2" fill="currentColor"/></svg>Другое</span></label>
+        </div></fieldset>
+        <label class="field-label" for="profile-protocol">Протокол VPN</label>
+        <select id="profile-protocol" name="protocol"><option value="vless-reality" selected>VLESS + REALITY · для V2RayTun</option><option value="amneziawg">AmneziaWG 3.1 · файл .conf</option><option value="vless">VLESS + XHTTP</option><option value="trojan">Trojan + XHTTP</option><option value="vmess">VMess AEAD + XHTTP</option></select>
+        <p id="profile-protocol-help" class="field-help protocol-help">Основной вариант для актуальных клиентов с поддержкой XHTTP.</p>
+        <label class="field-label" for="profile-configuration">Режим передачи XHTTP</label>
+        <select id="profile-configuration" name="configuration"><option value="packet-up" selected>Пакетная отправка</option><option value="auto">Автовыбор</option><option value="stream-up">Потоковая отправка</option></select>
+        <p id="xhttp-help" class="field-help">Режим передачи XHTTP влияет на совместимость клиента и сети. Эти варианты используют HTTPS с TLS 1.3.</p>
+        <details class="advanced-settings"><summary>Дополнительные настройки</summary><label class="field-label" for="profile-fingerprint">TLS-отпечаток клиента</label><select id="profile-fingerprint" name="fingerprint"><option value="chrome" selected>Chrome</option><option value="firefox">Firefox</option></select><p class="field-help">Формат TLS-рукопожатия, похожий на выбранный браузер. Клиент должен поддерживать этот отпечаток. Он не гарантирует защиту от распознавания VPN.</p></details>
+        <div class="encryption-note"><span class="small-shield" aria-hidden="true">✓</span><span>Шифрованное подключение через порт 443<span id="create-protocol-caption" class="note-caption">REALITY · XTLS Vision</span></span></div>
+        <p id="create-error" class="form-error" role="alert" hidden></p>
+        <button id="create-submit" class="button button-primary button-full" type="submit"><span class="plus" aria-hidden="true">+</span>Создать подключение</button>
+      </form>
+    </dialog>
+
+    <dialog id="profile-dialog" class="modal profile-modal">
+      <div class="modal-content">
+        <div class="modal-heading"><div><span class="eyebrow">ПРОФИЛЬ ПОДКЛЮЧЕНИЯ</span><h2 id="detail-name">Подключение</h2></div><button type="button" class="icon-button close-dialog" aria-label="Закрыть"><span aria-hidden="true">×</span></button></div>
+        <div class="profile-detail-meta"><span class="status-badge"><i></i>Готов к подключению</span><span id="detail-device" class="muted"></span></div>
+        <p id="detail-configuration" class="configuration-detail"></p>
+        <p id="detail-client-help" class="field-help"></p>
+        <div class="qr-panel"><div id="profile-qr" class="qr-code" aria-label="QR-код профиля"></div><p>Отсканируйте QR-код в VPN-клиенте</p></div>
+        <div class="connection-address"><span>Ссылка подключения</span><div><code id="profile-link"></code><button id="copy-inline" class="icon-button" type="button" aria-label="Скопировать ссылку"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M15 8V4a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h4"/></svg></button></div></div>
+        <button id="copy-profile" class="button button-primary button-full" type="button">Скопировать ссылку</button>
+        <div class="download-actions"><button id="download-link" class="button button-secondary" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M12 3v12m-4-4 4 4 4-4M4 16v4h16v-4"/></svg>Скачать .txt</button><button id="download-json" class="button button-secondary" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M12 3v12m-4-4 4 4 4-4M4 16v4h16v-4"/></svg>Скачать JSON</button></div>
+        <p class="detail-help"><span id="profile-format-help">Импортируйте ссылку или файл в совместимый клиент. </span><button id="detail-help-button" class="text-button" type="button">Как подключиться</button></p>
+      </div>
+    </dialog>
+
+    <dialog id="pool-create-dialog" class="modal pool-modal">
+      <form id="pool-create-form" class="modal-content">
+        <div class="modal-heading"><div><span class="eyebrow">ОБЩАЯ ПОДПИСКА</span><h2>Создайте пул профилей</h2></div><button type="button" class="icon-button close-dialog" aria-label="Закрыть"><span aria-hidden="true">×</span></button></div>
+        <p class="muted modal-intro">Один QR для выбранных профилей. Если в пуле есть AmneziaWG, QR открывает набор с отдельными файлами и подпиской для Xray-клиентов.</p>
+        <label class="field-label" for="pool-name">Название пула</label><input id="pool-name" name="name" type="text" maxlength="48" placeholder="Например, мои устройства" required autocomplete="off">
+        <fieldset class="pool-selection"><legend class="field-label">Профили в пуле</legend><div id="pool-profile-options"></div></fieldset>
+        <p class="field-help">Ссылка даёт доступ ко всем выбранным профилям. Передавайте её только тем, кому нужен этот доступ.</p>
+        <p id="pool-create-error" class="form-error" role="alert" hidden></p>
+        <button id="pool-create-submit" class="button button-primary button-full" type="submit">Создать пул и QR-код</button>
+      </form>
+    </dialog>
+
+    <dialog id="pool-dialog" class="modal pool-modal">
+      <div class="modal-content">
+        <div class="modal-heading"><div><span class="eyebrow">ПУЛ ПРОФИЛЕЙ</span><h2 id="pool-detail-name">Общая подписка</h2></div><button type="button" class="icon-button close-dialog" aria-label="Закрыть"><span aria-hidden="true">×</span></button></div>
+        <div class="profile-detail-meta"><span id="pool-detail-status" class="status-badge"><i></i><span>Ссылка активна</span></span><span id="pool-detail-count" class="muted"></span></div>
+        <div id="pool-subscription-content"><div class="qr-panel"><div id="pool-qr" class="qr-code" aria-label="QR-код подписки пула"></div><p id="pool-qr-help">Добавьте как подписку в совместимом VPN-клиенте</p></div>
+          <div class="connection-address"><span>Ссылка подписки</span><div><code id="pool-link"></code><button id="copy-pool-inline" class="icon-button" type="button" aria-label="Скопировать ссылку подписки">⧉</button></div></div>
+          <button id="copy-pool" class="button button-primary button-full" type="button">Скопировать ссылку подписки</button>
+          <div class="download-actions"><button id="download-pool" class="button button-secondary" type="button">Скачать ссылку .txt</button><button id="rotate-pool" class="button button-secondary" type="button">Заменить ссылку</button></div>
+        </div>
+        <p id="pool-import-help" class="detail-help">В клиенте используйте импорт подписки по URL или QR. Обновление подписки подтянет выбранные активные профили.</p>
+        <div id="pool-xray-subscription" hidden>
+          <div class="qr-panel"><div id="pool-xray-qr" class="qr-code" aria-label="QR подписки для V2RayTun"></div><p>Этот QR можно импортировать в V2RayTun как подписку</p></div>
+          <button id="copy-pool-xray" class="button button-secondary button-full" type="button">Скопировать подписку V2RayTun</button>
+          <p class="field-help">В V2RayTun загрузятся профили Xray; AmneziaWG добавляется отдельно. Ссылка подписки также даёт доступ к файлам всего пула — передавайте её только тем, кому доверяете.</p>
+        </div>
+        <div id="pool-members" class="pool-members"></div>
+        <div class="info-note pool-access-note"><p>Ссылка открывает все профили пула. Её отзыв или замена остановит дальнейшую загрузку подписки. Уже импортированные конфиги продолжат работать — для отключения VPN-доступа отзовите сами профили.</p></div>
+        <p id="pool-detail-error" class="form-error" role="alert" hidden></p>
+        <button id="revoke-pool" class="button button-danger button-full" type="button">Отозвать ссылку пула</button>
+      </div>
+    </dialog>
+
+    <dialog id="pool-confirm-dialog" class="modal confirm-modal">
+      <div class="modal-content"><div class="modal-heading"><div class="warning-icon" aria-hidden="true">!</div><button type="button" class="icon-button close-dialog" aria-label="Закрыть"><span aria-hidden="true">×</span></button></div><h2 id="pool-confirm-title">Отозвать ссылку?</h2><p id="pool-confirm-description" class="muted revoke-description"></p><p id="pool-confirm-error" class="form-error" role="alert" hidden></p><div class="confirm-actions"><button class="button button-secondary close-dialog" type="button">Отмена</button><button id="pool-confirm-submit" class="button button-danger" type="button">Отозвать ссылку</button></div></div>
+    </dialog>
+
+    <dialog id="revoke-dialog" class="modal confirm-modal">
+      <div class="modal-content"><div class="modal-heading"><div class="warning-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 3 2.5 20h19L12 3Z"/><path d="M12 9v5m0 3v.1"/></svg></div><button type="button" class="icon-button close-dialog" aria-label="Закрыть"><span aria-hidden="true">×</span></button></div><h2>Отключить подключение?</h2><p class="muted revoke-description">Профиль <strong id="revoke-name"></strong> перестанет работать. Для этого устройства можно будет создать новый.</p><p id="revoke-error" class="form-error" role="alert" hidden></p><div class="confirm-actions"><button class="button button-secondary close-dialog" type="button">Отмена</button><button id="revoke-submit" class="button button-danger" type="button">Отключить</button></div></div>
+    </dialog>
+
+    <dialog id="help-dialog" class="modal help-modal">
+      <div class="modal-content"><div class="modal-heading"><div><span class="eyebrow">БЫСТРЫЙ СТАРТ</span><h2>Подключитесь за три шага</h2></div><button type="button" class="icon-button close-dialog" aria-label="Закрыть"><span aria-hidden="true">×</span></button></div><ol class="help-steps"><li><span>1</span><div><h3>Установите VPN-клиент</h3><p>Для VLESS + REALITY используйте V2RayTun на Android или актуальный Xray-клиент на Windows. Для AmneziaWG 3.1 используйте клиент с поддержкой этой версии, например AmneziaWG.</p></div></li><li><span>2</span><div><h3>Добавьте свой профиль</h3><p>Создайте подключение в Signal. В клиенте выберите импорт из буфера обмена или отсканируйте QR-код.</p></div></li><li><span>3</span><div><h3>Включите подключение</h3><p>Выберите импортированный профиль. Для всего устройства включите режим VPN или TUN и разрешите создание VPN-подключения.</p></div></li></ol><div class="info-note"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M12 2 3.5 6v6c0 5 8.5 10 8.5 10s8.5-5 8.5-10V6L12 2Z"/><path d="m8 12 3 3 5-6"/></svg><p>Данные между устройством и сервером шифруются. Сам IP виден провайдеру; шифрование не гарантирует защиту от блокировки адреса.</p></div><button class="button button-primary button-full close-dialog" type="button">Понятно</button></div>
+    </dialog>
+  </body>
+</html>

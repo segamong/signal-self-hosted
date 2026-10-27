@@ -28,3 +28,10 @@ android/signing/
 *.p8
 .idea/
 .vscode/
+*.sqlite*
+*.tar*
+server-operations/private/
+server-operations/vendor/
+server-operations/__pycache__/
+vpn-console/private/
+vpn-console/__pycache__/

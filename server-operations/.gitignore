@@ -1,0 +1,5 @@
+private/
+*.key
+*.conf
+*.zip
+vendor/
